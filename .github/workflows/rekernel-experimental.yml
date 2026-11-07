@@ -56,7 +56,8 @@ jobs:
           make "${args[@]}" olddefconfig
           grep -qx 'CONFIG_REKERNEL=y' out/.config
           grep -qx 'CONFIG_REKERNEL_NETWORK=y' out/.config
-          make -j2 "${args[@]}" Image.gz-dtb 2>&1 | tee ../build-experimental.log
+          make -j4 "${args[@]}" kernel/signal.o drivers/android/binder.o drivers/rekernel/rekernel.o net/ipv4/tcp_ipv4.o net/ipv6/tcp_ipv6.o 2>&1 | tee ../build-experimental.log
+          make -j4 "${args[@]}" Image.gz-dtb 2>&1 | tee -a ../build-experimental.log
           test -s out/arch/arm64/boot/Image.gz-dtb
           sha256sum out/arch/arm64/boot/Image.gz-dtb > ../SHA256SUMS-experimental
       - name: Upload experimental build and log
