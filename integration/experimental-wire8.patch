@@ -1,3 +1,30 @@
+diff --git a/Integrate/patches.sh b/Integrate/patches.sh
+index f3da9ca..f9b18d5 100644
+--- a/Integrate/patches.sh
++++ b/Integrate/patches.sh
+@@ -59,7 +59,14 @@ obj-$(CONFIG_REKERNEL) += rekernel/' $i
+ #ifdef CONFIG_REKERNEL\
+ #include <../rekernel/rekernel.h>\
+ #endif /* CONFIG_REKERNEL */' $i
++		if ! grep -q '#include <../rekernel/rekernel.h>' "$i"; then
++			sed -i '/#include "binder_alloc.h"/i\
++#ifdef CONFIG_REKERNEL\
++#include <../rekernel/rekernel.h>\
++#endif /* CONFIG_REKERNEL */' "$i"
++		fi
+ 
++		if grep -q 'TF_UPDATE_TXN' include/uapi/linux/android/binder.h; then
+ 		if grep -q 'binder_find_outdated_transaction_ilocked' $i; then
+ 			sed -i '/if ((t->flags & TF_UPDATE_TXN) && proc->is_frozen) {/i\
+ #ifdef CONFIG_REKERNEL\
+@@ -177,6 +184,7 @@ binder_find_outdated_transaction_ilocked(struct binder_transaction *t,\
+ 			fi
+ 		fi
+ 
++		fi
+ 		binder_proc_transaction_line=$(awk '/binder_proc_transaction\(\) - sends a transaction to a process and wakes it up/{print NR}' $i)
+ 		sed -i ''"$((binder_proc_transaction_line - 1))"'i\
+ #ifdef CONFIG_REKERNEL\
 diff --git a/Integrate/rekernel/rekernel.c b/Integrate/rekernel/rekernel.c
 index d37841e..8daaea5 100644
 --- a/Integrate/rekernel/rekernel.c
