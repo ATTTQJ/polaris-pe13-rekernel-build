@@ -64,6 +64,16 @@ jobs:
         run: |
           set -euxo pipefail
           python3 -c 'import pathlib; p=pathlib.Path("fs/kernfs/mount.c"); s=p.read_text(); a="mutex_lock(&d_inode(dentry)->i_mutex);"; b="mutex_unlock(&d_inode(dentry)->i_mutex);"; assert s.count(a)==1 and s.count(b)==1; p.write_text(s.replace(a,"inode_lock(d_inode(dentry));").replace(b,"inode_unlock(d_inode(dentry));"))'
+          git add fs/kernfs/mount.c
+          git commit -m "Adapt inode locking to PixelExperience 4.9"
+          git cherry-pick 8885cb277e5b53eb65ea81bca3d26e45eaeb0b1e
+          if ! git cherry-pick 34bd8534a6a9ef3155e9dad8500f7d002ffd42b2; then
+            test "$(git diff --name-only --diff-filter=U)" = fs/kernfs/mount.c
+            git checkout --ours -- fs/kernfs/mount.c
+            git add fs/kernfs/mount.c
+            GIT_EDITOR=true git cherry-pick --continue
+          fi
+          grep -q '^int subsys_cgroup_allow_attach' kernel/cgroup/cgroup.c
           bash "$GITHUB_WORKSPACE/rekernel/Integrate/patches.sh"
           git apply "$GITHUB_WORKSPACE/integration/experimental-tcp-hooks.patch"
           grep -q 'rekernel_binder_transaction' drivers/android/binder.c
