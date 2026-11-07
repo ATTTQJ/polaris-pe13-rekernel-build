@@ -1,0 +1,42 @@
+name: Freezer V2 compatibility diagnostic
+on:
+  push:
+    paths:
+      - '.github/workflows/freezer-v2-diagnostic.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Fetch PixelExperience source
+        run: |
+          git init kernel
+          git -C kernel remote add origin https://github.com/PixelExperience-Devices/kernel_xiaomi_polaris.git
+          git -C kernel fetch --depth=1 origin dce351ed301019553d148266a62fd3274f69ff22
+          git -C kernel checkout --detach FETCH_HEAD
+      - name: Check candidate backports
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel
+          commits=(91c9855c76dfe520182a1419e45e1171dfa5d70e 58ca979f992b3f850e98a09235e8ea7429ef0333 f7c3151cdcd9b2aa33a6c3034e5d0c5157e16c43 cad5a73f004ecfa0d123490ffead564a847b8473 c85f4b1fd6359cf370231d03eb2565abe41e4c08 61ce760c296f88fbffd6f9ec761663f10db3efb8 20658ae85179076e1cae03a6e9d5c5fcc2ce1b45 dfb6710eb64a0b5ad9283b2a96920f0a93377b6f 6a784621feb0593ffe4350ba21ea5ee8485519da b2d014afeaecc0eaf6450417304c34981c46fdeb b3a81bde32fafbfaf0ba9c833e0ac8c4093e1398 ec5897f5c1dba935bf59040d91d760e400a86a5c 8d41f14c5af262d1a18584682c7703f6ff21b351 9226bd3da1719fc5f1f226a28eda985bd86578da 7e54cca7ce522e14e7f2c7718666cb7338eb0b20 4c918c4317998e29a7a85012562aa599bdf05e59 12ac3f5695ad6410687d416b6d59a4a792665eb0 861515fe25d09c148481963ef1a6f9e32b04f149 e983c4c9955dc474e15aa9f1a68725143c54fc8b fc6b807be97df3c1bb2e7c9373b2f8dc25084aef fc0e2d79e89c29d6f18b57856a29fd16a476abb7)
+          for c in "${commits[@]}"; do
+            printf '\n=== %s ===\n' "$c" | tee -a ../compatibility.txt
+            curl --retry 3 -fsSL "https://github.com/JackA1ltman/kernel_xiaomi_sdm845_binder_cgroup_v2/commit/$c.patch" -o ../candidate.patch
+            if git apply --check ../candidate.patch 2>>../compatibility.txt; then
+              git apply ../candidate.patch
+              echo APPLIED | tee -a ../compatibility.txt
+            else
+              echo NEEDS_MANUAL_ADAPTATION | tee -a ../compatibility.txt
+            fi
+          done
+          echo 'Diagnostic only: incomplete prerequisite history; not a buildable or tested patchset.' | tee -a ../compatibility.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: freezer-v2-compatibility-diagnostic
+          path: compatibility.txt
+          if-no-files-found: warn
