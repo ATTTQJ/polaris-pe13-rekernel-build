@@ -1,0 +1,107 @@
+diff --git a/Integrate/rekernel/rekernel.c b/Integrate/rekernel/rekernel.c
+index d37841e..9736e73 100644
+--- a/Integrate/rekernel/rekernel.c
++++ b/Integrate/rekernel/rekernel.c
+@@ -1,5 +1,6 @@
+ #include <linux/init.h>
+ #include <linux/types.h>
++#include <linux/spinlock.h>
+ 
+ #include <net/sock.h>
+ #include <net/ip.h>
+@@ -44,6 +45,27 @@ static const char* rpc_type[] = {
+ static struct sock* netlink_socket;
+ extern struct net init_net;
+ static unsigned long netlink_unit = 0;
++#ifdef CONFIG_REKERNEL_NETWORK
++#define REKERNEL_NET_UID_MAX 32
++static uid_t rekernel_net_uids[REKERNEL_NET_UID_MAX];
++static bool rekernel_net_uids_full;
++static DEFINE_SPINLOCK(rekernel_net_uids_lock);
++
++static bool net_uid_monitored(uid_t uid)
++{
++	int i;
++	if (READ_ONCE(rekernel_net_uids_full))
++		return true;
++	for (i = 0; i < REKERNEL_NET_UID_MAX; i++) {
++		uid_t current_uid = READ_ONCE(rekernel_net_uids[i]);
++		if (current_uid == uid)
++			return true;
++		if (!current_uid)
++			return false;
++	}
++	return false;
++}
++#endif
+ #ifdef CONFIG_PROC_FS
+ static struct proc_dir_entry* rekernel_dir, * rekernel_unit_entry;
+ #endif /* CONFIG_PROC_FS */
+@@ -70,19 +92,51 @@ static int sendMessage(char* packet_buffer, uint16_t len) {
+ }
+ static void netlink_rcv_msg(struct sk_buff* socket_buffer) {
+ 	struct nlmsghdr* nlhdr = NULL;
+-	char* umsg = NULL;
++	struct rekernel_cmd { int type; int uid; };
++	struct rekernel_cmd *cmd;
+ 
+ 	if (socket_buffer->len >= nlmsg_total_size(0)) {
+ 		nlhdr = nlmsg_hdr(socket_buffer);
+-		umsg = nlmsg_data(nlhdr);
+-		if (umsg) {
++		if (!nlmsg_ok(nlhdr, socket_buffer->len) || nlmsg_len(nlhdr) < sizeof(int))
++			return;
++		cmd = nlmsg_data(nlhdr);
++		switch (cmd->type) {
+ #ifdef CONFIG_PROC_FS
+-			if (!memcmp(umsg, "#proc_remove", nlmsg_len(nlhdr))) {
+-				if (rekernel_dir) {
+-					proc_remove(rekernel_dir);
+-				}
++		case 1:
++			if (rekernel_dir) {
++				proc_remove(rekernel_dir);
++				rekernel_dir = NULL;
+ 			}
++			break;
+ #endif /* CONFIG_PROC_FS */
++		#ifdef CONFIG_REKERNEL_NETWORK
++		case 2: {
++			uid_t uid;
++			int i;
++			if (nlmsg_len(nlhdr) < sizeof(*cmd))
++				break;
++			uid = cmd->uid;
++			if (!uid)
++				break;
++			spin_lock_bh(&rekernel_net_uids_lock);
++			if (net_uid_monitored(uid)) {
++				spin_unlock_bh(&rekernel_net_uids_lock);
++				break;
++			}
++			for (i = 0; i < REKERNEL_NET_UID_MAX; i++) {
++				if (!rekernel_net_uids[i]) {
++					WRITE_ONCE(rekernel_net_uids[i], uid);
++					break;
++				}
++			}
++			if (i == REKERNEL_NET_UID_MAX)
++				WRITE_ONCE(rekernel_net_uids_full, true);
++			spin_unlock_bh(&rekernel_net_uids_lock);
++			break;
++		}
++		#endif
++		default:
++			break;
+ 		}
+ 	}
+ }
+@@ -135,7 +189,7 @@ static unsigned int rekernel_pkg_ipv4_ipv6_in(void* priv, struct sk_buff* socket
+ 		return NF_ACCEPT;
+ 
+ 	uid = sock_i_uid(sk).val;
+-	if (uid < MIN_USERAPP_UID)
++	if (uid < MIN_USERAPP_UID || !net_uid_monitored(uid))
+ 		return NF_ACCEPT;
+ 
+ 	if (data_len <= 0 && !th->syn && !th->fin && !th->rst)
