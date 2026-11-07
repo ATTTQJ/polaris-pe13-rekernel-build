@@ -1,0 +1,56 @@
+name: Freezer V2 ordered port trial
+on:
+  push:
+    paths:
+      - '.github/workflows/freezer-v2-series.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  port-trial:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Fetch exact source and reference history
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git init kernel
+          git -C kernel remote add pixel https://github.com/PixelExperience-Devices/kernel_xiaomi_polaris.git
+          git -C kernel fetch --depth=1 pixel dce351ed301019553d148266a62fd3274f69ff22
+          git -C kernel checkout --detach FETCH_HEAD
+          git -C kernel remote add reference https://github.com/JackA1ltman/kernel_xiaomi_sdm845_binder_cgroup_v2.git
+          git -C kernel fetch --depth=180 reference vic-cgroup-v2-freezer
+          git -C kernel cat-file -e 264b4ae44^
+          git -C kernel cat-file -e fc0e2d79e89c29d6f18b57856a29fd16a476abb7
+      - name: Trial ordered cherry-picks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel
+          git config user.name 'Port trial'
+          git config user.email 'port-trial@users.noreply.github.com'
+          git rev-list --reverse --first-parent '264b4ae44^..fc0e2d79e89c29d6f18b57856a29fd16a476abb7' > ../series.txt
+          total=$(wc -l < ../series.txt)
+          echo "candidate_series_count=$total" | tee ../trial.txt
+          while read -r commit; do
+            title=$(git show -s --format=%s "$commit")
+            echo "Trying $commit $title" | tee -a ../trial.txt
+            if git cherry-pick --allow-empty "$commit" >>../trial.txt 2>&1; then
+              echo "APPLIED $commit" | tee -a ../trial.txt
+            else
+              echo "STOPPED_FOR_CONFLICT $commit" | tee -a ../trial.txt
+              git status --short | tee -a ../trial.txt
+              git diff --name-only --diff-filter=U | tee -a ../trial.txt
+              break
+            fi
+          done < ../series.txt
+          echo 'Trial only: conflicts and omitted earlier dependencies require review; not a tested kernel.' | tee -a ../trial.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: freezer-v2-ordered-port-trial
+          path: |
+            trial.txt
+            series.txt
+          if-no-files-found: warn
