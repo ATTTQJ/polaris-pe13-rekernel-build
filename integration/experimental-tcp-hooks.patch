@@ -1,0 +1,40 @@
+--- a/net/ipv4/tcp_ipv4.c
++++ b/net/ipv4/tcp_ipv4.c
+@@ -1407,9 +1407,16 @@
+  * This is because we cannot sleep with the original spinlock
+  * held.
+  */
++#ifdef CONFIG_REKERNEL_NETWORK
++extern void rekernel_tcp_notify(struct sock *sk, struct sk_buff *skb, int version);
++#endif
+ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
+ {
+ 	struct sock *rsk;
++
++#ifdef CONFIG_REKERNEL_NETWORK
++	rekernel_tcp_notify(sk, skb, 4);
++#endif
+ 
+ 	if (sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
+ 		struct dst_entry *dst;
+--- a/net/ipv6/tcp_ipv6.c
++++ b/net/ipv6/tcp_ipv6.c
+@@ -1249,11 +1249,18 @@
+  * This is because we cannot sleep with the original spinlock
+  * held.
+  */
++#ifdef CONFIG_REKERNEL_NETWORK
++extern void rekernel_tcp_notify(struct sock *sk, struct sk_buff *skb, int version);
++#endif
+ static int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
+ {
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+ 	struct tcp_sock *tp;
+ 	struct sk_buff *opt_skb = NULL;
++
++#ifdef CONFIG_REKERNEL_NETWORK
++	rekernel_tcp_notify(sk, skb, 6);
++#endif
+ 
+ 	/* Imagine: socket is IPv6. IPv4 packet arrives,
+ 	   goes to IPv4 receive handler and backlogged.
