@@ -1,0 +1,49 @@
+name: PixelExperience 13 kernel baseline
+on:
+  push:
+    paths:
+      - '.github/workflows/baseline.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-16 lld-16 llvm-16 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libelf-dev bc bison flex device-tree-compiler cpio
+      - name: Fetch exact PixelExperience kernel revision
+        run: |
+          git init kernel
+          cd kernel
+          git remote add origin https://github.com/PixelExperience-Devices/kernel_xiaomi_polaris.git
+          git fetch --depth=1 origin dce351ed301019553d148266a62fd3274f69ff22
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = dce351ed301019553d148266a62fd3274f69ff22
+      - name: Build unchanged baseline
+        working-directory: kernel
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          make O=out CC=clang-16 LD=ld.lld-16 AR=llvm-ar-16 NM=llvm-nm-16 OBJCOPY=llvm-objcopy-16 OBJDUMP=llvm-objdump-16 STRIP=llvm-strip-16 polaris_defconfig
+          make -j2 O=out CC=clang-16 LD=ld.lld-16 AR=llvm-ar-16 NM=llvm-nm-16 OBJCOPY=llvm-objcopy-16 OBJDUMP=llvm-objdump-16 STRIP=llvm-strip-16 Image.gz-dtb 2>&1 | tee ../build.log
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          sha256sum out/arch/arm64/boot/Image.gz-dtb > ../SHA256SUMS
+      - name: Upload build and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pe13-baseline-experimental
+          if-no-files-found: warn
+          path: |
+            build.log
+            SHA256SUMS
+            kernel/out/arch/arm64/boot/Image.gz-dtb
