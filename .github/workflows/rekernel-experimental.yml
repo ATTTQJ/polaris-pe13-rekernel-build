@@ -52,7 +52,7 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-
           args=(O=out CC=clang-16 LD=ld.lld-16 AR=llvm-ar-16 NM=llvm-nm-16 OBJCOPY=llvm-objcopy-16 OBJDUMP=llvm-objdump-16 STRIP=llvm-strip-16)
           make "${args[@]}" polaris_defconfig
-          scripts/config --file out/.config --enable REKERNEL --enable REKERNEL_NETWORK
+          scripts/config --file out/.config --set-str LOCALVERSION '-Etude-Op.13-No.2-codex-rk8net' --enable REKERNEL --enable REKERNEL_NETWORK
           make "${args[@]}" olddefconfig
           grep -qx 'CONFIG_REKERNEL=y' out/.config
           grep -qx 'CONFIG_REKERNEL_NETWORK=y' out/.config
