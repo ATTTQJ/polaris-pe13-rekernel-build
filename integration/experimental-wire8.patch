@@ -1,5 +1,5 @@
 diff --git a/Integrate/rekernel/rekernel.c b/Integrate/rekernel/rekernel.c
-index d37841e..9736e73 100644
+index d37841e..8daaea5 100644
 --- a/Integrate/rekernel/rekernel.c
 +++ b/Integrate/rekernel/rekernel.c
 @@ -1,5 +1,6 @@
@@ -105,3 +105,47 @@ index d37841e..9736e73 100644
  		return NF_ACCEPT;
  
  	if (data_len <= 0 && !th->syn && !th->fin && !th->rst)
+@@ -182,6 +236,30 @@ int register_netfilter(void) {
+ 	return LINE_SUCCESS;
+ }
+ #endif /* CONFIG_REKERNEL_NETWORK */
++#ifdef CONFIG_REKERNEL_NETWORK
++/* Called at the same TCP receive sites used by the 8.0.0 network KPM. */
++void rekernel_tcp_notify(struct sock *sk, struct sk_buff *skb, int version)
++{
++	const struct tcphdr *th;
++	uid_t uid;
++	int data_len;
++
++	if (!READ_ONCE(netlink_unit) || !sk || !skb || !sk_fullsock(sk))
++		return;
++	uid = sock_i_uid(sk).val;
++	if (uid < MIN_USERAPP_UID || !net_uid_monitored(uid))
++		return;
++	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
++		return;
++	th = tcp_hdr(skb);
++	if (!th || th->doff < 5)
++		return;
++	data_len = (int)skb->len - skb_transport_offset(skb) - (th->doff << 2);
++	if (data_len <= 0 && !th->syn && !th->fin && !th->rst)
++		return;
++	rekernel_report(NETWORK, version, data_len, NULL, uid, NULL, true, NULL);
++}
++#endif
+ struct netlink_kernel_cfg cfg = {
+ 	.input = netlink_rcv_msg, // set recv callback
+ };
+@@ -237,12 +315,6 @@ static int start_rekernel(void) {
+ 		}
+ 	}
+ #endif /* CONFIG_PROC_FS */
+-#ifdef CONFIG_REKERNEL_NETWORK
+-	if (register_netfilter()) {
+-		pr_err("%s: Failed to hook netfilter!\n", __func__);
+-		return -LINE_ERROR;
+-	}
+-#endif /* CONFIG_REKERNEL_NETWORK */
+ 	return LINE_SUCCESS;
+ }
+ 
