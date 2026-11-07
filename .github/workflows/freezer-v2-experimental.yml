@@ -63,6 +63,7 @@ jobs:
         working-directory: kernel
         run: |
           set -euxo pipefail
+          python3 -c 'import pathlib; p=pathlib.Path("fs/kernfs/mount.c"); s=p.read_text(); a="mutex_lock(&d_inode(dentry)->i_mutex);"; b="mutex_unlock(&d_inode(dentry)->i_mutex);"; assert s.count(a)==1 and s.count(b)==1; p.write_text(s.replace(a,"inode_lock(d_inode(dentry));").replace(b,"inode_unlock(d_inode(dentry));"))'
           bash "$GITHUB_WORKSPACE/rekernel/Integrate/patches.sh"
           git apply "$GITHUB_WORKSPACE/integration/experimental-tcp-hooks.patch"
           grep -q 'rekernel_binder_transaction' drivers/android/binder.c
