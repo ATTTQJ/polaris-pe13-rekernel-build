@@ -1,0 +1,71 @@
+name: Experimental ReKernel network integration
+on:
+  push:
+    paths:
+      - '.github/workflows/rekernel-experimental.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-16 lld-16 llvm-16 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libelf-dev bc bison flex device-tree-compiler cpio
+      - name: Fetch pinned sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git init kernel
+          git -C kernel remote add origin https://github.com/PixelExperience-Devices/kernel_xiaomi_polaris.git
+          git -C kernel fetch --depth=1 origin dce351ed301019553d148266a62fd3274f69ff22
+          git -C kernel checkout --detach FETCH_HEAD
+          git init rekernel
+          git -C rekernel remote add origin https://github.com/Sakion-Team/Re-Kernel.git
+          git -C rekernel fetch --depth=1 origin ac08296174d7fb2801c0eee1084f067a34f8a0fe
+          git -C rekernel checkout --detach FETCH_HEAD
+          git -C rekernel apply "$GITHUB_WORKSPACE/integration/experimental-wire8.patch"
+      - name: Apply and verify experimental integration
+        shell: bash
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          bash "$GITHUB_WORKSPACE/rekernel/Integrate/patches.sh"
+          git apply "$GITHUB_WORKSPACE/integration/experimental-tcp-hooks.patch"
+          grep -q 'rekernel_binder_transaction' drivers/android/binder.c
+          grep -q 'rekernel_report' kernel/signal.c
+          grep -q 'rekernel_tcp_notify(sk, skb, 4)' net/ipv4/tcp_ipv4.c
+          grep -q 'rekernel_tcp_notify(sk, skb, 6)' net/ipv6/tcp_ipv6.c
+          grep -q 'REKERNEL_NET_UID_MAX' drivers/rekernel/rekernel.c
+      - name: Build experimental kernel
+        shell: bash
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          export PATH=/usr/lib/llvm-16/bin:$PATH
+          export ARCH=arm64 SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-
+          args=(O=out CC=clang-16 LD=ld.lld-16 AR=llvm-ar-16 NM=llvm-nm-16 OBJCOPY=llvm-objcopy-16 OBJDUMP=llvm-objdump-16 STRIP=llvm-strip-16)
+          make "${args[@]}" polaris_defconfig
+          scripts/config --file out/.config --enable REKERNEL --enable REKERNEL_NETWORK
+          make "${args[@]}" olddefconfig
+          grep -qx 'CONFIG_REKERNEL=y' out/.config
+          grep -qx 'CONFIG_REKERNEL_NETWORK=y' out/.config
+          make -j2 "${args[@]}" Image.gz-dtb 2>&1 | tee ../build-experimental.log
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          sha256sum out/arch/arm64/boot/Image.gz-dtb > ../SHA256SUMS-experimental
+      - name: Upload experimental build and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experimental-rekernel-network-NOT-FOR-FLASHING
+          if-no-files-found: warn
+          path: |
+            build-experimental.log
+            SHA256SUMS-experimental
+            kernel/out/.config
+            kernel/out/arch/arm64/boot/Image.gz-dtb
