@@ -71,7 +71,7 @@ jobs:
           grep -q 'rekernel_tcp_notify(sk, skb, 4)' net/ipv4/tcp_ipv4.c
           grep -q 'rekernel_tcp_notify(sk, skb, 6)' net/ipv6/tcp_ipv6.c
           grep -q 'JOBCTL_TRAP_FREEZE' include/linux/sched.h
-      - name: Build experimental kernel
+      - name: Build focused kernel objects
         shell: bash
         working-directory: kernel
         run: |
@@ -85,7 +85,16 @@ jobs:
           grep -qx 'CONFIG_REKERNEL=y' out/.config
           grep -qx 'CONFIG_REKERNEL_NETWORK=y' out/.config
           make -j4 "${args[@]}" kernel/cgroup/cgroup.o kernel/cgroup/freezer.o kernel/signal.o drivers/android/binder.o drivers/rekernel/rekernel.o 2>&1 | tee ../build.log
-          make -j4 "${args[@]}" Image.gz-dtb 2>&1 | tee -a ../build.log
+      - name: Build complete experimental image
+        shell: bash
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          export PATH=/usr/lib/llvm-16/bin:$PATH ARCH=arm64 SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-
+          args=(O=out CC=clang-16 LD=ld.lld-16 AR=llvm-ar-16 NM=llvm-nm-16 OBJCOPY=llvm-objcopy-16 OBJDUMP=llvm-objdump-16 STRIP=llvm-strip-16)
+          make -k -j4 "${args[@]}" Image.gz-dtb 2>&1 | tee -a ../build.log
+          test -s out/arch/arm64/boot/Image.gz-dtb
           sha256sum out/arch/arm64/boot/Image.gz-dtb > ../SHA256SUMS
       - uses: actions/upload-artifact@v4
         if: always()
