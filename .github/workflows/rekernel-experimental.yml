@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - '.github/workflows/rekernel-experimental.yml'
+      - 'integration/**'
   workflow_dispatch:
 permissions:
   contents: read
