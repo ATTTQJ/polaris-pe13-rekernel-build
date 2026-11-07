@@ -26,7 +26,7 @@ index f3da9ca..f9b18d5 100644
  		sed -i ''"$((binder_proc_transaction_line - 1))"'i\
  #ifdef CONFIG_REKERNEL\
 diff --git a/Integrate/rekernel/rekernel.c b/Integrate/rekernel/rekernel.c
-index d37841e..8daaea5 100644
+index d37841e..d27999f 100644
 --- a/Integrate/rekernel/rekernel.c
 +++ b/Integrate/rekernel/rekernel.c
 @@ -1,5 +1,6 @@
@@ -132,7 +132,7 @@ index d37841e..8daaea5 100644
  		return NF_ACCEPT;
  
  	if (data_len <= 0 && !th->syn && !th->fin && !th->rst)
-@@ -182,6 +236,30 @@ int register_netfilter(void) {
+@@ -182,6 +236,29 @@ int register_netfilter(void) {
  	return LINE_SUCCESS;
  }
  #endif /* CONFIG_REKERNEL_NETWORK */
@@ -141,6 +141,7 @@ index d37841e..8daaea5 100644
 +void rekernel_tcp_notify(struct sock *sk, struct sk_buff *skb, int version)
 +{
 +	const struct tcphdr *th;
++	struct tcphdr header;
 +	uid_t uid;
 +	int data_len;
 +
@@ -149,9 +150,7 @@ index d37841e..8daaea5 100644
 +	uid = sock_i_uid(sk).val;
 +	if (uid < MIN_USERAPP_UID || !net_uid_monitored(uid))
 +		return;
-+	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
-+		return;
-+	th = tcp_hdr(skb);
++	th = skb_header_pointer(skb, 0, sizeof(header), &header);
 +	if (!th || th->doff < 5)
 +		return;
 +	data_len = (int)skb->len - skb_transport_offset(skb) - (th->doff << 2);
@@ -163,7 +162,7 @@ index d37841e..8daaea5 100644
  struct netlink_kernel_cfg cfg = {
  	.input = netlink_rcv_msg, // set recv callback
  };
-@@ -237,12 +315,6 @@ static int start_rekernel(void) {
+@@ -237,12 +314,6 @@ static int start_rekernel(void) {
  		}
  	}
  #endif /* CONFIG_PROC_FS */
