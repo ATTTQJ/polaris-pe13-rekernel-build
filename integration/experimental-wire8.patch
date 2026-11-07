@@ -149,3 +149,19 @@ index d37841e..8daaea5 100644
  	return LINE_SUCCESS;
  }
  
+diff --git a/Integrate/rekernel/rekernel.h b/Integrate/rekernel/rekernel.h
+index af7022a..912879b 100644
+--- a/Integrate/rekernel/rekernel.h
++++ b/Integrate/rekernel/rekernel.h
+@@ -20,7 +20,11 @@ enum binder_type {
+ };
+ 
+ static inline bool jobctl_frozen(struct task_struct* task) {
++#ifdef JOBCTL_TRAP_FREEZE
+ 	return ((task->jobctl & JOBCTL_TRAP_FREEZE) != 0);
++#else
++	return false;
++#endif
+ }
+ static inline bool frozen_task_group(struct task_struct* task) {
+ 	return (jobctl_frozen(task) || cgroup_freezing(task));
