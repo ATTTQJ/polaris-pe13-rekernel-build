@@ -26,7 +26,7 @@ index f3da9ca..f9b18d5 100644
  		sed -i ''"$((binder_proc_transaction_line - 1))"'i\
  #ifdef CONFIG_REKERNEL\
 diff --git a/Integrate/rekernel/rekernel.c b/Integrate/rekernel/rekernel.c
-index d37841e..d27999f 100644
+index d37841e..99d05c3 100644
 --- a/Integrate/rekernel/rekernel.c
 +++ b/Integrate/rekernel/rekernel.c
 @@ -1,5 +1,6 @@
@@ -36,10 +36,11 @@ index d37841e..d27999f 100644
  
  #include <net/sock.h>
  #include <net/ip.h>
-@@ -44,6 +45,27 @@ static const char* rpc_type[] = {
+@@ -44,6 +45,28 @@ static const char* rpc_type[] = {
  static struct sock* netlink_socket;
  extern struct net init_net;
  static unsigned long netlink_unit = 0;
++static bool rekernel_ready;
 +#ifdef CONFIG_REKERNEL_NETWORK
 +#define REKERNEL_NET_UID_MAX 32
 +static uid_t rekernel_net_uids[REKERNEL_NET_UID_MAX];
@@ -64,7 +65,7 @@ index d37841e..d27999f 100644
  #ifdef CONFIG_PROC_FS
  static struct proc_dir_entry* rekernel_dir, * rekernel_unit_entry;
  #endif /* CONFIG_PROC_FS */
-@@ -70,19 +92,51 @@ static int sendMessage(char* packet_buffer, uint16_t len) {
+@@ -70,19 +93,51 @@ static int sendMessage(char* packet_buffer, uint16_t len) {
  }
  static void netlink_rcv_msg(struct sk_buff* socket_buffer) {
  	struct nlmsghdr* nlhdr = NULL;
@@ -123,7 +124,7 @@ index d37841e..d27999f 100644
  		}
  	}
  }
-@@ -135,7 +189,7 @@ static unsigned int rekernel_pkg_ipv4_ipv6_in(void* priv, struct sk_buff* socket
+@@ -135,7 +190,7 @@ static unsigned int rekernel_pkg_ipv4_ipv6_in(void* priv, struct sk_buff* socket
  		return NF_ACCEPT;
  
  	uid = sock_i_uid(sk).val;
@@ -132,7 +133,7 @@ index d37841e..d27999f 100644
  		return NF_ACCEPT;
  
  	if (data_len <= 0 && !th->syn && !th->fin && !th->rst)
-@@ -182,6 +236,29 @@ int register_netfilter(void) {
+@@ -182,6 +237,29 @@ int register_netfilter(void) {
  	return LINE_SUCCESS;
  }
  #endif /* CONFIG_REKERNEL_NETWORK */
@@ -145,7 +146,7 @@ index d37841e..d27999f 100644
 +	uid_t uid;
 +	int data_len;
 +
-+	if (!READ_ONCE(netlink_unit) || !sk || !skb || !sk_fullsock(sk))
++	if (!smp_load_acquire(&rekernel_ready) || !sk || !skb || !sk_fullsock(sk))
 +		return;
 +	uid = sock_i_uid(sk).val;
 +	if (uid < MIN_USERAPP_UID || !net_uid_monitored(uid))
@@ -162,7 +163,16 @@ index d37841e..d27999f 100644
  struct netlink_kernel_cfg cfg = {
  	.input = netlink_rcv_msg, // set recv callback
  };
-@@ -237,12 +314,6 @@ static int start_rekernel(void) {
+@@ -207,7 +285,7 @@ static int start_rekernel(void) {
+ 
+ 	pr_info("Thank you for choosing Re:Kernel!\n");
+ #ifdef CONFIG_REKERNEL_NETWORK
+-	pr_info("NetFilter is enabled!\n");
++	pr_info("TCP network monitoring is enabled!\n");
+ #endif
+ 	pr_info("Re:Kernel v8.5 | DEVELOPER: Sakion Team | Timeline | USER PORT: %d\n", USER_PORT);
+ 	pr_info("Trying to create Re:Kernel Server......\n");
+@@ -237,14 +315,10 @@ static int start_rekernel(void) {
  		}
  	}
  #endif /* CONFIG_PROC_FS */
@@ -172,9 +182,22 @@ index d37841e..d27999f 100644
 -		return -LINE_ERROR;
 -	}
 -#endif /* CONFIG_REKERNEL_NETWORK */
++	smp_store_release(&rekernel_ready, true);
  	return LINE_SUCCESS;
  }
++late_initcall(start_rekernel);
  
+ void rekernel_report(int reporttype, int type, pid_t src_pid, struct task_struct* src, pid_t dst_pid, struct task_struct* dst, bool oneway, struct binder_transaction_data* tr) {
+ 	char binder_kmsg[PACKET_SIZE];
+@@ -255,7 +329,7 @@ void rekernel_report(int reporttype, int type, pid_t src_pid, struct task_struct
+ 	int i = 0;
+ 	int j = 0;
+ 
+-	if (start_rekernel())
++	if (!smp_load_acquire(&rekernel_ready))
+ 		return;
+ 
+ #ifdef CONFIG_REKERNEL_NETWORK
 diff --git a/Integrate/rekernel/rekernel.h b/Integrate/rekernel/rekernel.h
 index af7022a..912879b 100644
 --- a/Integrate/rekernel/rekernel.h
