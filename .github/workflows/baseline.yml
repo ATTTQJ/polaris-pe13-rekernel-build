@@ -28,6 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          export PATH=/usr/lib/llvm-16/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
