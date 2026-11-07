@@ -47,10 +47,10 @@ jobs:
               conflicts=$(git diff --name-only --diff-filter=U)
               echo "$conflicts" | tee -a ../port.log
               if [ "$commit" = 12ac3f5695ad6410687d416b6d59a4a792665eb0 ] && [ "$conflicts" = include/linux/sched/sysctl.h ]; then
-                python3 -c 'import pathlib; p=pathlib.Path("include/linux/sched/sysctl.h"); s=p.read_text(); a=s.index("<<<<<<< HEAD\\n"); b=s.index(">>>>>>> 12ac3f569",a); e=s.index("\\n",b); p.write_text(s[:a]+"#endif /* _LINUX_SCHED_SYSCTL_H */\\n"+s[e+1:])'
+                python3 -c 'import pathlib; p=pathlib.Path("include/linux/sched/sysctl.h"); s=p.read_text(); a=s.index("<<<<<<< HEAD\n"); b=s.index(">>>>>>> 12ac3f569",a); e=s.index("\n",b); p.write_text(s[:a]+"#endif /* _LINUX_SCHED_SYSCTL_H */\n"+s[e+1:])'
                 git add include/linux/sched/sysctl.h
               elif [ "$commit" = 861515fe25d09c148481963ef1a6f9e32b04f149 ] && [ "$conflicts" = kernel/signal.c ]; then
-                python3 -c 'import pathlib; p=pathlib.Path("kernel/signal.c"); s=p.read_text(); a=s.index("<<<<<<< HEAD\\n"); b=s.index(">>>>>>> 861515fe2",a); e=s.index("\\n",b); p.write_text(s[:a]+"#include <linux/cgroup.h>\\n"+s[e+1:])'
+                python3 -c 'import pathlib; p=pathlib.Path("kernel/signal.c"); s=p.read_text(); a=s.index("<<<<<<< HEAD\n"); b=s.index(">>>>>>> 861515fe2",a); e=s.index("\n",b); p.write_text(s[:a]+"#include <linux/cgroup.h>\n"+s[e+1:])'
                 git add kernel/signal.c
               else
                 exit 1
