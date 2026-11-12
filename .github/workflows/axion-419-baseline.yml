@@ -1,0 +1,51 @@
+name: Polaris 4.19 baseline source audit build
+on:
+  push:
+    paths:
+      - '.github/workflows/axion-419-baseline.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-16 lld-16 llvm-16 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libelf-dev bc bison flex device-tree-compiler cpio rsync
+      - name: Fetch Axion kernel base commit
+        run: |
+          set -euxo pipefail
+          git init kernel
+          git -C kernel remote add origin https://github.com/duckyduckG/android_kernel_xiaomi_sdm845_419.git
+          git -C kernel fetch --depth=1 origin 68473250d52537fce466ec6f10b0f67ed1e5b2dc
+          git -C kernel checkout --detach FETCH_HEAD
+          test "$(git -C kernel rev-parse HEAD)" = 68473250d52537fce466ec6f10b0f67ed1e5b2dc
+      - name: Configure and compile source baseline
+        shell: bash
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          export PATH=/usr/lib/llvm-16/bin:$PATH ARCH=arm64 SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-
+          args=(O=out CC=clang-16 LD=ld.lld-16 AR=llvm-ar-16 NM=llvm-nm-16 OBJCOPY=llvm-objcopy-16 OBJDUMP=llvm-objdump-16 STRIP=llvm-strip-16)
+          make "${args[@]}" vendor/sdm845-perf_defconfig vendor/xiaomi/sdm845-common.config vendor/xiaomi/polaris.config 2>&1 | tee ../config.log
+          grep -q '^CONFIG_MACH_XIAOMI_D5X=y' out/.config
+          make -j4 "${args[@]}" Image.gz-dtb 2>&1 | tee ../build.log
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          sha256sum out/arch/arm64/boot/Image.gz-dtb > ../SHA256SUMS
+      - name: Upload diagnostics - do not flash
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: polaris-419-source-baseline-NOT-FOR-FLASHING
+          if-no-files-found: warn
+          path: |
+            config.log
+            build.log
+            SHA256SUMS
+            kernel/out/.config
+            kernel/out/arch/arm64/boot/Image.gz-dtb
+
