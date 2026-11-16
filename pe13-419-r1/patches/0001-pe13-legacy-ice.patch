@@ -1,9 +1,9 @@
 diff --git a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
 new file mode 100644
-index 0000000000000000000000000000000000000000..2b0fd8e56db8c81a021d179a0a78a4cae89a3626
+index 0000000000000000000000000000000000000000..2e572781ba993b6cbaf502b0f90cc3668092a95e
 --- /dev/null
 +++ b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,10 @@
 +# Experimental PE13 legacy-data compatibility; not approved for device use.
 +# Apply after sdm845-perf_defconfig, sdm845-common.config and polaris.config.
 +CONFIG_FS_ENCRYPTION=y
@@ -13,6 +13,7 @@ index 0000000000000000000000000000000000000000..2b0fd8e56db8c81a021d179a0a78a4ca
 +CONFIG_ENABLE_LEGACY_PFK=y
 +CONFIG_FSCRYPT_LEGACY_ICE_PE13=y
 +CONFIG_QTI_CRYPTO_LEGACY_SCM=y
++CONFIG_SECURITY_PERF_EVENTS_RESTRICT=y
 diff --git a/drivers/scsi/ufs/ufshcd-crypto-qti.c b/drivers/scsi/ufs/ufshcd-crypto-qti.c
 index a552fd37136e2cf4bbaa171bf4f58d2b284fbd3d..6e3cb5beab7d0f31ea2a45bffee201fe545ea120 100644
 --- a/drivers/scsi/ufs/ufshcd-crypto-qti.c
@@ -336,3 +337,48 @@ index e67fec7df434263da4334c6e06f1c3943571ff91..383508e13161f71820c1d251040d2bff
  
  		if (derived_key)
  			kzfree(derived_key);
+diff --git a/kernel/events/core.c b/kernel/events/core.c
+index b102b37f236292f49bcd549d3a9cf78320c933b3..303d7c933fe951212f632b27504324e66ba3a4ca 100644
+--- a/kernel/events/core.c
++++ b/kernel/events/core.c
+@@ -434,7 +434,8 @@ static cpumask_var_t perf_online_mask;
+  *   1 - disallow cpu events for unpriv
+  *   2 - disallow kernel profiling for unpriv
+  */
+-int sysctl_perf_event_paranoid __read_mostly = 2;
++int sysctl_perf_event_paranoid __read_mostly =
++	IS_ENABLED(CONFIG_SECURITY_PERF_EVENTS_RESTRICT) ? 3 : 2;
+ 
+ /* Minimum for 512 kiB + 1 user control page */
+ int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' kiB per user */
+@@ -11203,6 +11204,10 @@ SYSCALL_DEFINE5(perf_event_open,
+ 		return err;
+ 
+ 	/* Do we allow access to perf_event_open(2) ? */
++	if (IS_ENABLED(CONFIG_SECURITY_PERF_EVENTS_RESTRICT) &&
++	    sysctl_perf_event_paranoid > 2 && !capable(CAP_SYS_ADMIN))
++		return -EACCES;
++
+ 	err = security_perf_event_open(&attr, PERF_SECURITY_OPEN);
+ 	if (err)
+ 		return err;
+diff --git a/security/Kconfig b/security/Kconfig
+index d84c59eefcd50ebb48625f814c63152fb139d214..f2935acc969f97233420ba56d8cc67c7f39daa94 100644
+--- a/security/Kconfig
++++ b/security/Kconfig
+@@ -18,6 +18,15 @@ config SECURITY_DMESG_RESTRICT
+ 
+ 	  If you are unsure how to answer this question, answer N.
+ 
++config SECURITY_PERF_EVENTS_RESTRICT
++	bool "Restrict unprivileged use of performance events"
++	depends on PERF_EVENTS
++	help
++	  Set kernel.perf_event_paranoid to 3 by default and disallow
++	  unprivileged perf_event_open calls while it remains above 2.
++	  This preserves the legacy Android kernel configuration contract.
++	  Existing LSM checks remain in effect.
++
+ config SECURITY
+ 	bool "Enable different security models"
+ 	depends on SYSFS
