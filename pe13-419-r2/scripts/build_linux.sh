@@ -23,6 +23,7 @@ cd "$package"
 sha256sum -c patches/SHA256SUMS
 cd "$build_root/kernel"
 while read -r digest patch; do
+    patch=${patch%$'\r'}
     git apply --check "$package/$patch"
     git apply "$package/$patch"
 done < "$package/patches/SHA256SUMS"
