@@ -1,0 +1,338 @@
+diff --git a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b0fd8e56db8c81a021d179a0a78a4cae89a3626
+--- /dev/null
++++ b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+@@ -0,0 +1,9 @@
++# Experimental PE13 legacy-data compatibility; not approved for device use.
++# Apply after sdm845-perf_defconfig, sdm845-common.config and polaris.config.
++CONFIG_FS_ENCRYPTION=y
++CONFIG_FS_ENCRYPTION_INLINE_CRYPT=y
++CONFIG_BLK_INLINE_ENCRYPTION=y
++# CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK is not set
++CONFIG_ENABLE_LEGACY_PFK=y
++CONFIG_FSCRYPT_LEGACY_ICE_PE13=y
++CONFIG_QTI_CRYPTO_LEGACY_SCM=y
+diff --git a/drivers/scsi/ufs/ufshcd-crypto-qti.c b/drivers/scsi/ufs/ufshcd-crypto-qti.c
+index a552fd37136e2cf4bbaa171bf4f58d2b284fbd3d..6e3cb5beab7d0f31ea2a45bffee201fe545ea120 100644
+--- a/drivers/scsi/ufs/ufshcd-crypto-qti.c
++++ b/drivers/scsi/ufs/ufshcd-crypto-qti.c
+@@ -27,6 +27,26 @@
+ 
+ #define NUM_KEYSLOTS(hba) (hba->crypto_capabilities.config_count + 1)
+ 
++/* The legacy firmware reserves physical keyslots 0 and 1 for FDE. */
++static unsigned int ufshcd_crypto_qti_num_keyslots(struct ufs_hba *hba)
++{
++	unsigned int slots = ufshcd_num_keyslots(hba);
++
++	if (IS_ENABLED(CONFIG_QTI_CRYPTO_LEGACY_SCM)) {
++		slots = min(slots, 32U);
++		return slots > 2 ? slots - 2 : 0;
++	}
++	return slots;
++}
++
++static unsigned int ufshcd_crypto_qti_hw_keyslot(struct ufs_hba *hba,
++					       unsigned int slot)
++{
++	if (slot >= ufshcd_crypto_qti_num_keyslots(hba))
++		return ufshcd_num_keyslots(hba); /* Invalid hardware slot. */
++	return slot + (IS_ENABLED(CONFIG_QTI_CRYPTO_LEGACY_SCM) ? 2 : 0);
++}
++
+ static struct ufs_hba_crypto_variant_ops ufshcd_crypto_qti_variant_ops = {
+ 	.hba_init_crypto = ufshcd_crypto_qti_init_crypto,
+ 	.enable = ufshcd_crypto_qti_enable,
+@@ -85,6 +105,8 @@ static int ufshcd_crypto_qti_keyslot_program(struct keyslot_manager *ksm,
+ 	u8 data_unit_mask;
+ 	int crypto_alg_id;
+ 
++	slot = ufshcd_crypto_qti_hw_keyslot(hba, slot);
++
+ 	crypto_alg_id = ufshcd_crypto_cap_find(hba, key->crypto_mode,
+ 					       key->data_unit_size);
+ 
+@@ -127,6 +149,8 @@ static int ufshcd_crypto_qti_keyslot_evict(struct keyslot_manager *ksm,
+ 	int err = 0;
+ 	struct ufs_hba *hba = keyslot_manager_private(ksm);
+ 
++	slot = ufshcd_crypto_qti_hw_keyslot(hba, slot);
++
+ 	if (!ufshcd_is_crypto_enabled(hba) ||
+ 	    !ufshcd_keyslot_valid(hba, slot))
+ 		return -EINVAL;
+@@ -190,6 +214,7 @@ static int ufshcd_hba_init_crypto_qti_spec(struct ufs_hba *hba,
+ 	int err = 0;
+ 	unsigned int crypto_modes_supported[BLK_ENCRYPTION_MODE_MAX];
+ 	enum blk_crypto_mode_num blk_mode_num;
++	unsigned int features = BLK_CRYPTO_FEATURE_STANDARD_KEYS;
+ 
+ 	/* Default to disabling crypto */
+ 	hba->caps &= ~UFSHCD_CAP_CRYPTO;
+@@ -238,10 +263,16 @@ static int ufshcd_hba_init_crypto_qti_spec(struct ufs_hba *hba,
+ 			hba->crypto_cap_array[cap_idx].sdus_mask * 512;
+ 	}
+ 
+-	hba->ksm = keyslot_manager_create(hba->dev, ufshcd_num_keyslots(hba),
++	if (!ufshcd_crypto_qti_num_keyslots(hba)) {
++		err = -ENODEV;
++		goto out;
++	}
++	if (!IS_ENABLED(CONFIG_QTI_CRYPTO_LEGACY_SCM))
++		features |= BLK_CRYPTO_FEATURE_WRAPPED_KEYS;
++	hba->ksm = keyslot_manager_create(hba->dev,
++					  ufshcd_crypto_qti_num_keyslots(hba),
+ 					  ksm_ops,
+-					  BLK_CRYPTO_FEATURE_STANDARD_KEYS |
+-					  BLK_CRYPTO_FEATURE_WRAPPED_KEYS,
++					  features,
+ 					  crypto_modes_supported, hba);
+ 
+ 	if (!hba->ksm) {
+@@ -298,6 +329,7 @@ int ufshcd_crypto_qti_prep_lrbp_crypto(struct ufs_hba *hba,
+ {
+ 	struct bio_crypt_ctx *bc;
+ 	int ret = 0;
++	unsigned int hw_slot;
+ #if IS_ENABLED(CONFIG_CRYPTO_DEV_QCOM_ICE)
+ 	struct ice_data_setting setting;
+ 	bool bypass = true;
+@@ -337,11 +369,12 @@ int ufshcd_crypto_qti_prep_lrbp_crypto(struct ufs_hba *hba,
+ 		 */
+ 		return -EINVAL;
+ 	}
+-	if (!ufshcd_keyslot_valid(hba, bc->bc_keyslot))
++	hw_slot = ufshcd_crypto_qti_hw_keyslot(hba, bc->bc_keyslot);
++	if (!ufshcd_keyslot_valid(hba, hw_slot))
+ 		return -EINVAL;
+ 
+ 	lrbp->crypto_enable = true;
+-	lrbp->crypto_key_slot = bc->bc_keyslot;
++	lrbp->crypto_key_slot = hw_slot;
+ 	if (bc->is_ext4) {
+ 		lrbp->data_unit_num = (u64)cmd->request->bio->bi_iter.bi_sector;
+ 		lrbp->data_unit_num >>= 3;
+diff --git a/drivers/soc/qcom/Kconfig b/drivers/soc/qcom/Kconfig
+index 3bde0c2a310860976879218254f1c8e1ca42c0aa..359df7afde13c7649405c109c874ce0e05a2fae5 100644
+--- a/drivers/soc/qcom/Kconfig
++++ b/drivers/soc/qcom/Kconfig
+@@ -935,6 +935,16 @@ config QTI_CRYPTO_TZ
+ 	 programmed and managed through SCM calls to TZ where ICE driver
+ 	 will configure keys.
+ 
++config QTI_CRYPTO_LEGACY_SCM
++	bool "Legacy Polaris ICE firmware interface"
++	depends on MACH_XIAOMI_D5X && QTI_CRYPTO_TZ
++	depends on SCSI_UFS_CRYPTO_QTI
++	help
++	  Use the ICE v3 set-key/invalidate calls used by PE13's 4.9 driver,
++	  without the newer storage-type argument. Reserve hardware keyslots
++	  zero and one for FDE. Hardware-wrapped keys are not supported.
++	  Enable only for the legacy Polaris firmware compatibility build.
++
+ config MSM_BAM_DMUX
+ 	bool "BAM Data Mux Driver"
+ 	depends on SPS
+diff --git a/drivers/soc/qcom/crypto-qti-tz.c b/drivers/soc/qcom/crypto-qti-tz.c
+index 5b9e3f5691f21aab676d5b89d3cea568417ad996..715a27dc8d11a9b4b88e156f88e29bfccbcdf67d 100644
+--- a/drivers/soc/qcom/crypto-qti-tz.c
++++ b/drivers/soc/qcom/crypto-qti-tz.c
+@@ -39,6 +39,12 @@ int crypto_qti_program_key(struct crypto_vops_qti_entry *ice_entry,
+ 		u32 words[BLK_CRYPTO_MAX_WRAPPED_KEY_SIZE / sizeof(u32)];
+ 	} key_new;
+ 
++	if (IS_ENABLED(CONFIG_QTI_CRYPTO_LEGACY_SCM) &&
++	    (storage_type != UFS_CE || key->is_hw_wrapped ||
++	     key->crypto_mode != BLK_ENCRYPTION_MODE_AES_256_XTS ||
++	     key->size != 64 || slot < 2 || slot > 31))
++		return -EOPNOTSUPP;
++
+ 	err = qtee_shmbridge_allocate_shm(key->size, &shm);
+ 	if (err)
+ 		return -ENOMEM;
+@@ -47,7 +53,7 @@ int crypto_qti_program_key(struct crypto_vops_qti_entry *ice_entry,
+ 
+ 	memcpy(key_new.bytes, key->raw, key->size);
+ 	if (!key->is_hw_wrapped) {
+-		for (i = 0; i < ARRAY_SIZE(key_new.words); i++)
++		for (i = 0; i < key->size / sizeof(key_new.words[0]); i++)
+ 			__cpu_to_be32s(&key_new.words[i]);
+ 	}
+ 
+@@ -63,12 +69,20 @@ int crypto_qti_program_key(struct crypto_vops_qti_entry *ice_entry,
+ 	desc.args[4] = data_unit_mask;
+ 	desc.args[5] = storage_type;
+ 
++	if (IS_ENABLED(CONFIG_QTI_CRYPTO_LEGACY_SCM)) {
++		smc_id = TZ_ES_CONFIG_SET_ICE_KEY_ID;
++		desc.arginfo = TZ_ES_CONFIG_SET_ICE_KEY_PARAM_ID;
++		desc.args[5] = 0;
++	}
+ 
+ 	err = scm_call2_noretry(smc_id, &desc);
+ 	if (err)
+ 		pr_err("%s:SCM call Error: 0x%x slot %d\n",
+ 				__func__, err, slot);
+ 
++	memzero_explicit(&key_new, sizeof(key_new));
++	memzero_explicit(tzbuf, key->size);
++	dmac_flush_range(tzbuf, tzbuf + key->size);
+ 	qtee_shmbridge_free_shm(&shm);
+ 
+ 	return err;
+@@ -87,6 +101,14 @@ int crypto_qti_invalidate_key(
+ 	desc.args[0] = slot;
+ 	desc.args[1] = storage_type;
+ 
++	if (IS_ENABLED(CONFIG_QTI_CRYPTO_LEGACY_SCM)) {
++		if (storage_type != UFS_CE || slot < 2 || slot > 31)
++			return -EOPNOTSUPP;
++		smc_id = TZ_ES_INVALIDATE_ICE_KEY_ID;
++		desc.arginfo = TZ_ES_INVALIDATE_ICE_KEY_PARAM_ID;
++		desc.args[1] = 0;
++	}
++
+ 	err = scm_call2_noretry(smc_id, &desc);
+ 	if (err)
+ 		pr_err("%s:SCM call Error: 0x%x\n", __func__, err);
+@@ -104,6 +126,9 @@ int crypto_qti_tz_raw_secret(const u8 *wrapped_key,
+ 	struct scm_desc desc = {0};
+ 	char *tzbuf_key;
+ 
++	if (IS_ENABLED(CONFIG_QTI_CRYPTO_LEGACY_SCM))
++		return -EOPNOTSUPP;
++
+ 	err = qtee_shmbridge_allocate_shm(wrapped_key_size, &shm_key);
+ 	if (err)
+ 		return -ENOMEM;
+diff --git a/drivers/soc/qcom/crypto-qti-tz.h b/drivers/soc/qcom/crypto-qti-tz.h
+index 23de95094e33ea210e45b9e662c4d20d1be2aaf7..6be98ef838f687ed496fe039c0227f929ab263b4 100644
+--- a/drivers/soc/qcom/crypto-qti-tz.h
++++ b/drivers/soc/qcom/crypto-qti-tz.h
+@@ -12,6 +12,19 @@
+ #define TZ_ES_INVALIDATE_ICE_KEY_CE_TYPE 0x6
+ #define TZ_ES_RETRIEVE_RAW_SECRET_CE_TYPE 0x7
+ 
++/* ICE v3 interface used by the PE13 Polaris 4.9 PFK driver. */
++#define TZ_ES_CONFIG_SET_ICE_KEY_ID \
++	TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_SIP, TZ_SVC_ES, 0x4)
++#define TZ_ES_INVALIDATE_ICE_KEY_ID \
++	TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_SIP, TZ_SVC_ES, 0x3)
++#define TZ_ES_CONFIG_SET_ICE_KEY_PARAM_ID \
++	TZ_SYSCALL_CREATE_PARAM_ID_5( \
++	TZ_SYSCALL_PARAM_TYPE_VAL, TZ_SYSCALL_PARAM_TYPE_BUF_RW, \
++	TZ_SYSCALL_PARAM_TYPE_VAL, TZ_SYSCALL_PARAM_TYPE_VAL, \
++	TZ_SYSCALL_PARAM_TYPE_VAL)
++#define TZ_ES_INVALIDATE_ICE_KEY_PARAM_ID \
++	TZ_SYSCALL_CREATE_PARAM_ID_1(TZ_SYSCALL_PARAM_TYPE_VAL)
++
+ #define TZ_ES_CONFIG_SET_ICE_KEY_CE_TYPE_ID \
+ 	TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_SIP, TZ_SVC_ES, \
+ 	TZ_ES_CONFIG_SET_ICE_KEY_CE_TYPE)
+diff --git a/fs/crypto/Kconfig b/fs/crypto/Kconfig
+index fbf7b094703b5f6929060ccc029b975418c21b95..83ab0bf2aee5f6d36369f1fd82a442fdd7f2196f 100644
+--- a/fs/crypto/Kconfig
++++ b/fs/crypto/Kconfig
+@@ -38,3 +38,16 @@ config ENABLE_LEGACY_PFK
+ 	  from nonce and master key. In private mode the keys
+ 	  will be used by inline crypto hardware to encrypt the
+ 	  file content.
++
++config FSCRYPT_LEGACY_ICE_PE13
++	bool "PE13 Polaris legacy F2FS ICE compatibility"
++	depends on MACH_XIAOMI_D5X && F2FS_FS
++	depends on FS_ENCRYPTION_INLINE_CRYPT && SCSI_UFS_CRYPTO_QTI
++	depends on !BLK_INLINE_ENCRYPTION_FALLBACK
++	select ENABLE_LEGACY_PFK
++	help
++	  Preserve the v1 PRIVATE-mode per-file key derivation used by the
++	  PE13 Polaris 4.9 kernel. Select hardware inline encryption for these
++	  F2FS files even when the old fstab omits the inlinecrypt option.
++	  Refuse unsupported PRIVATE policies instead of using software crypto.
++	  This requires separate validation of the firmware ICE interface.
+diff --git a/fs/crypto/inline_crypt.c b/fs/crypto/inline_crypt.c
+index 30fd821305665c2f7c4b3adff36e7ac0c0cec9d0..e639065bdcbbcfbf74870deea99849f47b0aab0e 100644
+--- a/fs/crypto/inline_crypt.c
++++ b/fs/crypto/inline_crypt.c
+@@ -105,18 +105,32 @@ int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
+ 	struct request_queue **devs;
+ 	int num_devs;
+ 	int i;
++	bool legacy_ice = IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) &&
++		fscrypt_policy_contents_mode(&ci->ci_policy) ==
++		FSCRYPT_MODE_PRIVATE;
+ 
+ 	/* The file must need contents encryption, not filenames encryption */
+ 	if (!S_ISREG(inode->i_mode))
+ 		return 0;
+ 
++	/* PE13's v1 F2FS ICE format requires the UFS hardware path. */
++	if (legacy_ice &&
++	    (ci->ci_policy.version != FSCRYPT_POLICY_V1 ||
++	     strcmp(sb->s_type->name, "f2fs") ||
++	     sb->s_blocksize != 4096 || is_hw_wrapped_key ||
++	     (fscrypt_policy_flags(&ci->ci_policy) &
++	      ~FSCRYPT_POLICY_FLAGS_PAD_MASK))) {
++		fscrypt_warn(inode, "Unsupported PE13 legacy ICE policy");
++		return -EOPNOTSUPP;
++	}
++
+ 	/* blk-crypto must implement the needed encryption algorithm */
+ 	if (crypto_mode == BLK_ENCRYPTION_MODE_INVALID)
+-		return 0;
++		return legacy_ice ? -EOPNOTSUPP : 0;
+ 
+-	/* The filesystem must be mounted with -o inlinecrypt */
+-	if (!sb->s_cop->inline_crypt_enabled ||
+-	    !sb->s_cop->inline_crypt_enabled(sb))
++	/* The original PE13 fstab predates the inlinecrypt mount option. */
++	if (!legacy_ice && (!sb->s_cop->inline_crypt_enabled ||
++	    !sb->s_cop->inline_crypt_enabled(sb)))
+ 		return 0;
+ 
+ 	/*
+@@ -138,12 +152,14 @@ int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
+ 	 */
+ 
+ 	if (IS_ENABLED(CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK) &&
+-	    !is_hw_wrapped_key) {
++	    !is_hw_wrapped_key && !legacy_ice) {
+ 		ci->ci_inlinecrypt = true;
+ 		return 0;
+ 	}
+ 
+ 	num_devs = fscrypt_get_num_devices(sb);
++	if (num_devs < 1)
++		return -EINVAL;
+ 	devs = kmalloc_array(num_devs, sizeof(*devs), GFP_NOFS);
+ 	if (!devs)
+ 		return -ENOMEM;
+@@ -164,6 +180,10 @@ int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
+ 	ci->ci_inlinecrypt = true;
+ out_free_devs:
+ 	kfree(devs);
++	if (legacy_ice && !ci->ci_inlinecrypt) {
++		fscrypt_warn(inode, "PE13 legacy ICE requires compatible hardware");
++		return -EOPNOTSUPP;
++	}
+ 	return 0;
+ }
+ 
+diff --git a/fs/crypto/keysetup_v1.c b/fs/crypto/keysetup_v1.c
+index e67fec7df434263da4334c6e06f1c3943571ff91..383508e13161f71820c1d251040d2bff6d879365 100644
+--- a/fs/crypto/keysetup_v1.c
++++ b/fs/crypto/keysetup_v1.c
+@@ -349,10 +349,11 @@ static int setup_v1_file_key_derived(struct fscrypt_info *ci,
+ 		memcpy(key_new.bytes, raw_master_key, ci->ci_mode->keysize);
+ #endif
+ 
+-		for (i = 0; i < ARRAY_SIZE(key_new.words); i++)
++		for (i = 0; i < ci->ci_mode->keysize / sizeof(key_new.words[0]); i++)
+ 			__cpu_to_be32s(&key_new.words[i]);
+ 
+ 		err = setup_v1_file_key_direct(ci, key_new.bytes);
++		memzero_explicit(&key_new, sizeof(key_new));
+ 
+ 		if (derived_key)
+ 			kzfree(derived_key);
