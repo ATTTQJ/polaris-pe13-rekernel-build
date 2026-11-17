@@ -40,7 +40,7 @@ python3 "$package/tests/run_host_checks.py" --kernel "$PWD" --cc clang-16
 python3 "$package/tests/check_f2fs_layout.py" --kernel "$PWD" --cc clang-16
 mkdir "$build_root/artifacts"
 if [[ ${PE13_DTB_ONLY:-0} == 1 ]]; then
-    mapfile -t dtb_targets < <(find arch/arm64/boot/dts/xiaomi/polaris -maxdepth 1 -name '*.dts' -printf 'xiaomi/polaris/%f\n' | sed 's/\.dts$/.dtb/' | LC_ALL=C sort)
+    mapfile -t dtb_targets < <(find arch/arm64/boot/dts/xiaomi/polaris -maxdepth 1 -name '*.dts' ! -name '*-overlay.dts' -printf 'xiaomi/polaris/%f\n' | sed 's/\.dts$/.dtb/' | LC_ALL=C sort)
     test "${#dtb_targets[@]}" = 14
     make -j"${JOBS:-4}" "${args[@]}" "${dtb_targets[@]}" |& tee "$build_root/build.log"
     for dtb in "${dtb_targets[@]}"; do
