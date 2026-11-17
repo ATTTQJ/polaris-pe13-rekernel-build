@@ -1,0 +1,186 @@
+diff --git a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+index c0c9e897..af76f8f2 100644
+--- a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
++++ b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+@@ -11,3 +11,5 @@ CONFIG_SECURITY_PERF_EVENTS_RESTRICT=y
+ # Keep new nodes readable by the original PE13 4.9 filesystem driver.
+ # CONFIG_F2FS_FS_COMPRESSION is not set
+ CONFIG_F2FS_LEGACY_EXTRA_ATTR_PE13=y
++# Old vendor gralloc requires cache maintenance without DMA attachments.
++CONFIG_ION_FORCE_DMA_SYNC=y
+diff --git a/drivers/staging/android/ion/compat_ion.c b/drivers/staging/android/ion/compat_ion.c
+index 05781044..22c102ce 100644
+--- a/drivers/staging/android/ion/compat_ion.c
++++ b/drivers/staging/android/ion/compat_ion.c
+@@ -35,6 +35,18 @@ struct compat_ion_handle_data {
+ 	compat_int_t handle;
+ };
+ 
++struct compat_ion_pe13_flush_data {
++	compat_int_t handle;
++	compat_int_t fd;
++	compat_uptr_t vaddr;
++	compat_uint_t offset;
++	compat_uint_t length;
++};
++
++#define COMPAT_ION_PE13_IOC_CLEAN _IOWR('M', 0, struct compat_ion_pe13_flush_data)
++#define COMPAT_ION_PE13_IOC_INV _IOWR('M', 1, struct compat_ion_pe13_flush_data)
++#define COMPAT_ION_PE13_IOC_CLEAN_INV _IOWR('M', 2, struct compat_ion_pe13_flush_data)
++
+ #define COMPAT_ION_IOC_ALLOC	_IOWR(ION_IOC_MAGIC, 0, \
+ 				      struct compat_ion_old_allocation_data)
+ #define COMPAT_ION_IOC_FREE	_IOWR(ION_IOC_MAGIC, 1, \
+@@ -144,6 +156,21 @@ long compat_ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 		return filp->f_op->unlocked_ioctl(filp, ION_IOC_FREE,
+ 							(unsigned long)data);
+ 	}
++	case COMPAT_ION_PE13_IOC_CLEAN:
++	case COMPAT_ION_PE13_IOC_INV:
++	case COMPAT_ION_PE13_IOC_CLEAN_INV:
++	{
++		struct compat_ion_pe13_flush_data data;
++		int fd;
++
++		if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
++			return -ENOIOCTLCMD;
++		if (copy_from_user(&data, compat_ptr(arg), sizeof(data)))
++			return -EFAULT;
++		fd = data.fd >= 0 ? data.fd : data.handle;
++		return ion_pe13_cache_sync(fd, data.offset, data.length,
++				_IOC_NR(cmd));
++	}
+ 	case ION_IOC_SHARE:
+ 	case ION_IOC_MAP:
+ 	case ION_IOC_IMPORT:
+diff --git a/drivers/staging/android/ion/ion-ioctl.c b/drivers/staging/android/ion/ion-ioctl.c
+index acf483fe..d39a1867 100644
+--- a/drivers/staging/android/ion/ion-ioctl.c
++++ b/drivers/staging/android/ion/ion-ioctl.c
+@@ -23,6 +23,7 @@ union ion_ioctl_arg {
+ 	struct ion_fd_data fd;
+ 	struct ion_old_allocation_data old_allocation;
+ 	struct ion_handle_data handle;
++	struct ion_pe13_flush_data pe13_flush;
+ #endif
+ };
+ 
+@@ -162,6 +163,20 @@ long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	case ION_IOC_IMPORT:
+ 		data.fd.handle = data.fd.fd;
+ 		break;
++	case ION_PE13_IOC_CLEAN:
++	case ION_PE13_IOC_INV:
++	case ION_PE13_IOC_CLEAN_INV:
++	{
++		int fd;
++
++		if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
++			return -ENOTTY;
++		fd = data.pe13_flush.fd >= 0 ? data.pe13_flush.fd :
++			data.pe13_flush.handle;
++		ret = ion_pe13_cache_sync(fd, data.pe13_flush.offset,
++				data.pe13_flush.length, _IOC_NR(cmd));
++		break;
++	}
+ #endif
+ 	default:
+ 		return -ENOTTY;
+diff --git a/drivers/staging/android/ion/ion.c b/drivers/staging/android/ion/ion.c
+index cd653bfa..17d2d133 100644
+--- a/drivers/staging/android/ion/ion.c
++++ b/drivers/staging/android/ion/ion.c
+@@ -36,6 +36,9 @@
+ #include <soc/qcom/secure_buffer.h>
+ 
+ #include "ion.h"
++#ifdef CONFIG_ION_LEGACY
++#include "ion_legacy.h"
++#endif
+ #include "ion_secure_util.h"
+ #include "compat_ion.h"
+ 
+@@ -1034,6 +1037,56 @@ static const struct dma_buf_ops dma_buf_ops = {
+ 	.get_flags = ion_dma_buf_get_flags,
+ };
+ 
++#ifdef CONFIG_ION_LEGACY
++/* No userspace virtual address is dereferenced; the fd owns the buffer. */
++int ion_pe13_cache_sync(int fd, unsigned int offset, unsigned int length,
++		unsigned int op)
++{
++	struct dma_buf *dmabuf;
++	int ret;
++
++	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) ||
++			!IS_ENABLED(CONFIG_ION_FORCE_DMA_SYNC))
++		return -EOPNOTSUPP;
++	if (op > 2)
++		return -EINVAL;
++
++	dmabuf = dma_buf_get(fd);
++	if (IS_ERR(dmabuf))
++		return PTR_ERR(dmabuf);
++	if (dmabuf->ops != &dma_buf_ops || offset > dmabuf->size ||
++			length > dmabuf->size - offset) {
++		ret = -EINVAL;
++		goto out;
++	}
++	if (!length) {
++		ret = 0;
++		goto out;
++	}
++
++	/*
++	 * Use the existing cache-only callbacks (no kmap reference changes).
++	 * Sync the full buffer, also for partial requests, so multi-segment
++	 * heaps work and no untrusted virtual address reaches cache code.
++	 * FORCE_DMA_SYNC initializes the backing SG DMA addresses at alloc.
++	 */
++	if (op == 0)
++		ret = __ion_dma_buf_end_cpu_access(dmabuf, DMA_TO_DEVICE, false);
++	else if (op == 1)
++		ret = __ion_dma_buf_begin_cpu_access(dmabuf, DMA_FROM_DEVICE, false);
++	else {
++		ret = __ion_dma_buf_end_cpu_access(dmabuf, DMA_BIDIRECTIONAL, false);
++		if (!ret)
++			ret = __ion_dma_buf_begin_cpu_access(dmabuf,
++					DMA_BIDIRECTIONAL, false);
++	}
++
++out:
++	dma_buf_put(dmabuf);
++	return ret;
++}
++#endif
++
+ struct dma_buf *ion_alloc_dmabuf(size_t len, unsigned int heap_id_mask,
+ 				 unsigned int flags)
+ {
+diff --git a/drivers/staging/android/ion/ion_legacy.h b/drivers/staging/android/ion/ion_legacy.h
+index a4b78963..8e25bde8 100644
+--- a/drivers/staging/android/ion/ion_legacy.h
++++ b/drivers/staging/android/ion/ion_legacy.h
+@@ -96,6 +96,22 @@ struct ion_handle_data {
+  */
+ #define ION_IOC_IMPORT		_IOWR(ION_IOC_MAGIC, 5, struct ion_fd_data)
+ 
++/* Qualcomm 4.9 cache commands used by the PE13 vendor gralloc. */
++struct ion_pe13_flush_data {
++	int handle;
++	int fd;
++	void __user *vaddr;
++	unsigned int offset;
++	unsigned int length;
++};
++
++#define ION_PE13_IOC_CLEAN _IOWR('M', 0, struct ion_pe13_flush_data)
++#define ION_PE13_IOC_INV _IOWR('M', 1, struct ion_pe13_flush_data)
++#define ION_PE13_IOC_CLEAN_INV _IOWR('M', 2, struct ion_pe13_flush_data)
++
++int ion_pe13_cache_sync(int fd, unsigned int offset, unsigned int length,
++		unsigned int op);
++
+ #endif /* CONFIG_ION_LEGACY */
+ 
+ #endif /* _ION_LEGACY_H */

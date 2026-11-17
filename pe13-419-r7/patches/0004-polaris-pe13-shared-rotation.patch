@@ -1,0 +1,107 @@
+diff --git a/techpack/display/msm/msm_drv.h b/techpack/display/msm/msm_drv.h
+index 191989e9..5b20c022 100644
+--- a/techpack/display/msm/msm_drv.h
++++ b/techpack/display/msm/msm_drv.h
+@@ -134,6 +134,8 @@ enum msm_mdp_plane_property {
+ 	PLANE_PROP_SRC_CONFIG,
+ 	PLANE_PROP_FB_TRANSLATION_MODE,
+ 	PLANE_PROP_MULTIRECT_MODE,
++	/* Legacy PE13 vendor composer uses one shared, zero-default property. */
++	PLANE_PROP_PE13_ROTATION,
+ 
+ 	/* total # of properties */
+ 	PLANE_PROP_COUNT
+diff --git a/techpack/display/msm/sde/sde_plane.c b/techpack/display/msm/sde/sde_plane.c
+index 8848c03e..62bd9d06 100644
+--- a/techpack/display/msm/sde/sde_plane.c
++++ b/techpack/display/msm/sde/sde_plane.c
+@@ -1618,6 +1618,20 @@ void sde_plane_secure_ctrl_xin_client(struct drm_plane *plane,
+ 	_sde_plane_set_ot_limit(plane, crtc);
+ }
+ 
++/* PE13's 4.9 vendor ABI permits no rotate bit and shares the property ID. */
++static int sde_plane_pe13_rotation(uint64_t val, uint32_t *rotation)
++{
++	const uint64_t supported = DRM_MODE_ROTATE_0 |
++		DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y;
++
++	/* Polaris has no inline rotator; unsupported bits must still fail. */
++	if (val & ~supported)
++		return -EINVAL;
++
++	*rotation = val | DRM_MODE_ROTATE_0;
++	return 0;
++}
++
+ /**
+  * sde_plane_rot_install_properties - install plane rotator properties
+  * @plane: Pointer to drm plane
+@@ -1644,6 +1658,27 @@ static void sde_plane_rot_install_properties(struct drm_plane *plane,
+ 		supported_rotations |= DRM_MODE_ROTATE_0 | DRM_MODE_ROTATE_90 |
+ 			DRM_MODE_ROTATE_180 | DRM_MODE_ROTATE_270;
+ 
++	if (IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) &&
++			supported_rotations == (DRM_MODE_ROTATE_0 |
++			DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y)) {
++		static const struct drm_prop_enum_list pe13_rotations[] = {
++			{ __builtin_ffs(DRM_MODE_ROTATE_0) - 1, "rotate-0" },
++			{ __builtin_ffs(DRM_MODE_REFLECT_X) - 1, "reflect-x" },
++			{ __builtin_ffs(DRM_MODE_REFLECT_Y) - 1, "reflect-y" },
++		};
++
++		/*
++		 * msm_property_install_enum reuses priv->plane_property across
++		 * planes, like the 4.9 SDE driver. Leave rotation_property NULL
++		 * so atomic_set_property can translate legacy zero to ROTATE_0
++		 * before the normal SDE rotation and hardware checks.
++		 */
++		msm_property_install_enum(&psde->property_info, "rotation", 0, 1,
++				pe13_rotations, ARRAY_SIZE(pe13_rotations),
++				PLANE_PROP_PE13_ROTATION);
++		return;
++	}
++
+ 	ret = drm_plane_create_rotation_property(plane,
+ 			DRM_MODE_ROTATE_0, supported_rotations);
+ 	if (ret) {
+@@ -3998,6 +4033,7 @@ static int sde_plane_atomic_set_property(struct drm_plane *plane,
+ 	struct sde_plane_state *pstate;
+ 	struct drm_property *fod_property;
+ 	uint64_t fod_val = 0;
++	uint32_t pe13_rotation = DRM_MODE_ROTATE_0;
+ 	int idx, ret = -EINVAL;
+ 
+ 	SDE_DEBUG_PLANE(psde, "\n");
+@@ -4010,6 +4046,12 @@ static int sde_plane_atomic_set_property(struct drm_plane *plane,
+ 		pstate = to_sde_plane_state(state);
+ 		idx = msm_property_index(&psde->property_info,
+ 				property);
++		if (IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) &&
++				idx == PLANE_PROP_PE13_ROTATION) {
++			ret = sde_plane_pe13_rotation(val, &pe13_rotation);
++			if (ret)
++				return ret;
++		}
+ 		if (idx == PLANE_PROP_ZPOS) {
+ 			if (val & FOD_PRESSED_LAYER_ZORDER) {
+ 				val &= ~FOD_PRESSED_LAYER_ZORDER;
+@@ -4028,6 +4070,10 @@ static int sde_plane_atomic_set_property(struct drm_plane *plane,
+ 				&pstate->property_state, property, val);
+ 		if (!ret) {
+ 			switch (idx) {
++			case PLANE_PROP_PE13_ROTATION:
++				if (IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
++					state->rotation = pe13_rotation;
++				break;
+ 			case PLANE_PROP_INPUT_FENCE:
+ 				_sde_plane_set_input_fence(psde, pstate, val);
+ 				break;
+@@ -4298,6 +4344,8 @@ static void sde_plane_reset(struct drm_plane *plane)
+ 			pstate->property_values);
+ 
+ 	pstate->base.plane = plane;
++	if (IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
++		pstate->base.rotation = DRM_MODE_ROTATE_0;
+ 
+ 	plane->state = &pstate->base;
+ }
