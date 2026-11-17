@@ -1,0 +1,41 @@
+diff --git a/drivers/tty/tty_io.c b/drivers/tty/tty_io.c
+index 5b8e30d8..ab11ce0c 100644
+--- a/drivers/tty/tty_io.c
++++ b/drivers/tty/tty_io.c
+@@ -2545,6 +2545,27 @@ static struct tty_struct *tty_pair_get_tty(struct tty_struct *tty)
+ /*
+  * Split this up, as gcc can choke on it otherwise..
+  */
++/* Preserve the old vendor UART ABI without changing the PTY command space. */
++static unsigned int tty_pe13_geni_ioctl(struct tty_struct *tty, unsigned int cmd)
++{
++	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) ||
++			tty->driver->type != TTY_DRIVER_TYPE_SERIAL ||
++			!tty->driver->driver_name ||
++			strcmp(tty->driver->driver_name, "msm_geni_serial_hs"))
++		return cmd;
++
++	switch (cmd) {
++	case 0x5441: /* 4.9 TIOCPMGET, now overlaps TIOCGPTPEER */
++		return TIOCPMGET;
++	case 0x5442:
++		return TIOCPMPUT;
++	case 0x5443:
++		return TIOCPMACT;
++	default:
++		return cmd;
++	}
++}
++
+ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ {
+ 	struct tty_struct *tty = file_tty(file);
+@@ -2556,6 +2577,8 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ 	if (tty_paranoia_check(tty, file_inode(file), "tty_ioctl"))
+ 		return -EINVAL;
+ 
++	cmd = tty_pe13_geni_ioctl(tty, cmd);
++
+ 	real_tty = tty_pair_get_tty(tty);
+ 
+ 	/*
