@@ -1,0 +1,40 @@
+diff --git a/drivers/soc/qcom/subsystem_restart.c b/drivers/soc/qcom/subsystem_restart.c
+index 9a1c3992..d93c49fb 100644
+--- a/drivers/soc/qcom/subsystem_restart.c
++++ b/drivers/soc/qcom/subsystem_restart.c
+@@ -1830,6 +1830,26 @@ static void init_all_completions(struct subsys_device *subsys_dev)
+ 	init_completion(&subsys_dev->shutdown_ack);
+ }
+ 
++/* PE13 vendor genfscon rules include these 4.9 subsystem instance numbers.
++ * Preserve the paths without granting access to unrelated sysfs nodes.
++ */
++static int subsys_pe13_alloc_id(const char *name)
++{
++	static const char * const names[] = {
++		"spss", "venus", "ipa_fws", "a630_zap", "adsp", "slpi", "cdsp",
++		"modem", "wil6210",
++	};
++	unsigned int i;
++
++	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
++		return ida_simple_get(&subsys_ida, 0, 0, GFP_KERNEL);
++	for (i = 0; i < ARRAY_SIZE(names); i++)
++		if (!strcmp(name, names[i]))
++			return ida_simple_get(&subsys_ida, i, i + 1, GFP_KERNEL);
++	/* Other subsystems cannot consume a reserved vendor ABI number. */
++	return ida_simple_get(&subsys_ida, ARRAY_SIZE(names), 0, GFP_KERNEL);
++}
++
+ struct subsys_device *subsys_register(struct subsys_desc *desc)
+ {
+ 	struct subsys_device *subsys;
+@@ -1868,7 +1888,7 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
+ 	spin_lock_init(&subsys->track.s_lock);
+ 	init_subsys_timer(desc);
+ 
+-	subsys->id = ida_simple_get(&subsys_ida, 0, 0, GFP_KERNEL);
++	subsys->id = subsys_pe13_alloc_id(desc->name);
+ 	if (subsys->id < 0) {
+ 		wakeup_source_unregister(subsys->ssr_wlock);
+ 		ret = subsys->id;

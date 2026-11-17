@@ -1,8 +1,8 @@
-name: PE13 Polaris 4.19 r5 full kernel
+name: PE13 Polaris 4.19 r6 full kernel
 on:
   push:
-    branches: ['codex/pe13-419-legacy-ice-r5']
-    paths: ['pe13-419-r5/**', '.github/workflows/pe13-419-offline.yml']
+    branches: ['codex/pe13-419-legacy-ice-r6']
+    paths: ['pe13-419-r6/**', '.github/workflows/pe13-419-offline.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,15 +17,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-16 lld-16 llvm-16 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libelf-dev bc bison flex device-tree-compiler cpio rsync
       - name: Build pinned full kernel and candidate patches
-        run: bash pe13-419-r5/scripts/build_linux.sh "$RUNNER_TEMP/pe13-419-build"
+        run: bash pe13-419-r6/scripts/build_linux.sh "$RUNNER_TEMP/pe13-419-build"
       - name: Save build evidence
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pe13-419-r5-NOT-FOR-FLASHING
+          name: pe13-419-r6-NOT-FOR-FLASHING
           path: |
             ${{ runner.temp }}/pe13-419-build/*.log
             ${{ runner.temp }}/pe13-419-build/*.json
             ${{ runner.temp }}/pe13-419-build/toolchain.txt
             ${{ runner.temp }}/pe13-419-build/artifacts/
-            pe13-419-r5/out/host-checks/*results.json
+            pe13-419-r6/out/host-checks/*results.json
