@@ -24,7 +24,11 @@ MOCK = r'''
 #define CRTC_PROP_OUTPUT_FENCE 0
 #define CONNECTOR_PROP_RETIRE_FENCE 0
 struct drm_mode_object { unsigned type; };
-struct drm_device { void *dev_private; };
+struct drm_property;
+struct drm_mode_config_funcs {
+    bool (*pe13_legacy_fence)(struct drm_mode_object *,struct drm_property *);
+};
+struct drm_device { void *dev_private; struct { const struct drm_mode_config_funcs *funcs; } mode_config; };
 struct drm_property { struct drm_device *dev; };
 struct drm_crtc;
 struct drm_connector;
@@ -59,7 +63,8 @@ static int conn_set(struct drm_connector *c,void *s,struct drm_property *p,uint6
 TEST = r'''
 int main(void) {
     struct msm_drm_private priv={0};
-    struct drm_device dev={&priv};
+    const struct drm_mode_config_funcs config={msm_atomic_pe13_legacy_fence};
+    struct drm_device dev={&priv,{&config}};
     struct drm_property output={&dev},retire={&dev},other={&dev};
     priv.crtc_property[0]=&output;priv.conn_property[0]=&retire;
     const struct drm_crtc_funcs cf={crtc_set};
@@ -69,26 +74,26 @@ int main(void) {
     struct drm_crtc crtc={{DRM_MODE_OBJECT_CRTC},expected_state,&cf};
     struct drm_connector conn={{DRM_MODE_OBJECT_CONNECTOR},expected_state,&nf};
     struct drm_mode_object plane={3};
-    assert(msm_atomic_pe13_legacy_fence(&crtc.base,&other,12)==-ENOIOCTLCMD);
-    assert(msm_atomic_pe13_legacy_fence(&conn.base,&output,12)==-ENOIOCTLCMD);
-    assert(msm_atomic_pe13_legacy_fence(&plane,&output,12)==-ENOIOCTLCMD);
+    assert(set_property_pe13_fence(&crtc.base,&other,12)==-ENOIOCTLCMD);
+    assert(set_property_pe13_fence(&conn.base,&output,12)==-ENOIOCTLCMD);
+    assert(set_property_pe13_fence(&plane,&output,12)==-ENOIOCTLCMD);
     assert(valid_gets==0 && locks==0 && crtc_calls==0 && conn_calls==0);
     if(!PROFILE) {
-        assert(msm_atomic_pe13_legacy_fence(&crtc.base,&output,12)==-ENOIOCTLCMD);
-        assert(msm_atomic_pe13_legacy_fence(&conn.base,&retire,12)==-ENOIOCTLCMD);
+        assert(set_property_pe13_fence(&crtc.base,&output,12)==-ENOIOCTLCMD);
+        assert(set_property_pe13_fence(&conn.base,&retire,12)==-ENOIOCTLCMD);
         assert(valid_gets==0 && locks==0);
     } else {
         uint64_t pointer=UINT64_C(0x123456789abcdef0);
-        assert(msm_atomic_pe13_legacy_fence(&crtc.base,&output,pointer)==0);
+        assert(set_property_pe13_fence(&crtc.base,&output,pointer)==0);
         assert(received==pointer && crtc_calls==1 && conn_calls==0);
         setter_result=-EFAULT;
-        assert(msm_atomic_pe13_legacy_fence(&conn.base,&retire,pointer)==-EFAULT);
+        assert(set_property_pe13_fence(&conn.base,&retire,pointer)==-EFAULT);
         assert(received==pointer && conn_calls==1 && locks==2 && unlocks==2 && valid_puts==2 && !locked);
         valid=false;
-        assert(msm_atomic_pe13_legacy_fence(&crtc.base,&output,pointer)==-EINVAL);
+        assert(set_property_pe13_fence(&crtc.base,&output,pointer)==-EINVAL);
         assert(valid_gets==3 && valid_puts==2 && locks==2 && crtc_calls==1);
         dev.dev_private=NULL;
-        assert(msm_atomic_pe13_legacy_fence(&crtc.base,&output,pointer)==-ENOIOCTLCMD);
+        assert(set_property_pe13_fence(&crtc.base,&output,pointer)==-ENOIOCTLCMD);
     }
     puts("PASS PE13 profile isolation, exact property/object identity, current-state routing, validation, lock/ref balance and setter error propagation");
 }
@@ -104,11 +109,11 @@ def main():
              'techpack/display/msm/msm_drv.h', 'include/drm/drm_mode_config.h',
              'drivers/gpu/drm/drm_mode_object.c']
     texts = [(args.kernel/p).read_text() for p in paths]
-    helper = function(texts[0], 'msm_atomic_pe13_legacy_fence')
+    helper = function(texts[0], 'msm_atomic_pe13_legacy_fence')+function(texts[4], 'set_property_pe13_fence')
     assert 'drm_atomic_commit(' not in helper
     assert '.pe13_legacy_fence = msm_atomic_pe13_legacy_fence,' in texts[1]
     core = function(texts[4], 'drm_mode_obj_set_property_ioctl')
-    assert core.index('drm_mode_object_find(') < core.index('drm_mode_obj_find_prop_id(') < core.index('pe13_legacy_fence(') < core.index('set_property_atomic(')
+    assert core.index('drm_mode_object_find(') < core.index('drm_mode_obj_find_prop_id(') < core.index('set_property_pe13_fence(') < core.index('set_property_atomic(')
     assert 'if (ret != -ENOIOCTLCMD)' in core
     out = ROOT/'out/host-checks'
     out.mkdir(exist_ok=True)

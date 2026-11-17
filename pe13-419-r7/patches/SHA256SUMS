@@ -6,4 +6,4 @@ e4d5c9139b95d58c7eb6e4da020231f42a7e682e392d825f65f0ab2922075555  patches/0004-p
 1c1f234137ff4b0b12c372c2bc42743e4367d0fd135b870b3270a6eeab1a28e9  patches/0006-polaris-pe13-geni-uart-clock-abi.patch
 23576b4d16dfb6b70cd2f652db00fcbea459a52d418b847541fc3b4429f7bc81  patches/0007-polaris-pe13-ion-custom-abi.patch
 800bb00cd962aa4907d6f56be8869216c6a6deb830f4d38edee1943db7affc2f  patches/0008-polaris-pe13-subsystem-path-abi.patch
-a151dfff8b9c1b9ff9768cc1f5c2198df1c01f5e03409f64b584920a4717211c  patches/0009-polaris-pe13-legacy-fence-query.patch
+f196c21482af1cd792bb18f70a15fb5abcdb4311cac56d3193f88b44cb104e58  patches/0009-polaris-pe13-legacy-fence-query.patch
