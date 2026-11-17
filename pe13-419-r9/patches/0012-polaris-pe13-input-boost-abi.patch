@@ -1,0 +1,45 @@
+diff --git a/drivers/cpufreq/cpu-boost.c b/drivers/cpufreq/cpu-boost.c
+index cb07beeb..49aa3e89 100644
+--- a/drivers/cpufreq/cpu-boost.c
++++ b/drivers/cpufreq/cpu-boost.c
+@@ -14,6 +14,7 @@
+ #include <linux/input.h>
+ #include <linux/time.h>
+ #include <linux/sysfs.h>
++#include <linux/moduleparam.h>
+ 
+ #define cpu_boost_attr_rw(_name)		\
+ static struct kobj_attribute _name##_attr =	\
+@@ -131,6 +132,32 @@ static ssize_t show_input_boost_freq(struct kobject *kobj,
+ 
+ cpu_boost_attr_rw(input_boost_freq);
+ 
++#ifdef CONFIG_FSCRYPT_LEGACY_ICE_PE13
++/* PE13 init writes the 4.9 module-parameter paths. Both interfaces share
++ * the same state and frequency parser; no boost policy is added here.
++ */
++static int pe13_set_input_boost_freq(const char *buf,
++		const struct kernel_param *kp)
++{
++	ssize_t ret = store_input_boost_freq(NULL, NULL, buf, strlen(buf));
++
++	return ret < 0 ? ret : 0;
++}
++
++static int pe13_get_input_boost_freq(char *buf, const struct kernel_param *kp)
++{
++	return show_input_boost_freq(NULL, NULL, buf);
++}
++
++static const struct kernel_param_ops pe13_input_boost_freq_ops = {
++	.set = pe13_set_input_boost_freq,
++	.get = pe13_get_input_boost_freq,
++};
++module_param_cb(input_boost_freq, &pe13_input_boost_freq_ops, NULL, 0644);
++module_param(input_boost_ms, uint, 0644);
++module_param(sched_boost_on_input, uint, 0644);
++#endif
++
+ /*
+  * The CPUFREQ_ADJUST notifier is used to override the current policy min to
+  * make sure policy min >= boost_min. The cpufreq framework then does the job

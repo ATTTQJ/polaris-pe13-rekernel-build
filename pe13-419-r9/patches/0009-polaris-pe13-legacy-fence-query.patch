@@ -1,0 +1,149 @@
+diff --git a/drivers/gpu/drm/drm_mode_object.c b/drivers/gpu/drm/drm_mode_object.c
+index 57cc9aa6..45c4dc98 100644
+--- a/drivers/gpu/drm/drm_mode_object.c
++++ b/drivers/gpu/drm/drm_mode_object.c
+@@ -496,6 +496,40 @@ static int set_property_atomic(struct drm_mode_object *obj,
+ 	return ret;
+ }
+ 
++static int set_property_pe13_fence(struct drm_mode_object *obj,
++		struct drm_property *prop, uint64_t value)
++{
++	struct drm_device *dev = prop->dev;
++	struct drm_mode_object *ref;
++	int ret = -EINVAL;
++
++	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) ||
++			!dev->mode_config.funcs ||
++			!dev->mode_config.funcs->pe13_legacy_fence ||
++			!dev->mode_config.funcs->pe13_legacy_fence(obj, prop))
++		return -ENOIOCTLCMD;
++	if (!drm_property_change_valid_get(prop, value, &ref))
++		return -EINVAL;
++
++	drm_modeset_lock_all(dev);
++	if (obj->type == DRM_MODE_OBJECT_CRTC) {
++		struct drm_crtc *crtc = obj_to_crtc(obj);
++
++		if (crtc->state && crtc->funcs->atomic_set_property)
++			ret = crtc->funcs->atomic_set_property(crtc, crtc->state,
++					prop, value);
++	} else if (obj->type == DRM_MODE_OBJECT_CONNECTOR) {
++		struct drm_connector *conn = obj_to_connector(obj);
++
++		if (conn->state && conn->funcs->atomic_set_property)
++			ret = conn->funcs->atomic_set_property(conn, conn->state,
++					prop, value);
++	}
++	drm_property_change_valid_put(prop, ref);
++	drm_modeset_unlock_all(dev);
++	return ret;
++}
++
+ int drm_mode_obj_set_property_ioctl(struct drm_device *dev, void *data,
+ 				    struct drm_file *file_priv)
+ {
+@@ -518,6 +552,10 @@ int drm_mode_obj_set_property_ioctl(struct drm_device *dev, void *data,
+ 	if (!property)
+ 		goto out_unref;
+ 
++	ret = set_property_pe13_fence(arg_obj, property, arg->value);
++	if (ret != -ENOIOCTLCMD)
++		goto out_unref;
++
+ 	if (drm_drv_uses_atomic_modeset(property->dev))
+ 		ret = set_property_atomic(arg_obj, property, arg->value);
+ 	else
+diff --git a/include/drm/drm_mode_config.h b/include/drm/drm_mode_config.h
+index a0b202e1..35814ba7 100644
+--- a/include/drm/drm_mode_config.h
++++ b/include/drm/drm_mode_config.h
+@@ -37,6 +37,8 @@ struct drm_atomic_state;
+ struct drm_mode_fb_cmd2;
+ struct drm_format_info;
+ struct drm_display_mode;
++struct drm_mode_object;
++struct drm_property;
+ 
+ /**
+  * struct drm_mode_config_funcs - basic driver provided mode setting functions
+@@ -45,6 +47,7 @@ struct drm_display_mode;
+  * involve drivers.
+  */
+ struct drm_mode_config_funcs {
++
+ 	/**
+ 	 * @fb_create:
+ 	 *
+@@ -325,6 +328,17 @@ struct drm_mode_config_funcs {
+ 	 * &drm_private_state and &drm_private_obj.
+ 	 */
+ 	void (*atomic_state_free)(struct drm_atomic_state *state);
++	/**
++	 * @pe13_legacy_fence:
++	 * Optional PE13 compatibility for legacy vendor fence-property queries.
++	 * Called after object access and property membership checks. Select only
++	 * metadata queries; the core validates the value and calls the existing
++	 * atomic property setter under modeset locks, without a frame commit.
++	 * The selector itself must not modify state.
++	 */
++	bool (*pe13_legacy_fence)(struct drm_mode_object *obj,
++			struct drm_property *prop);
++
+ };
+ 
+ /**
+diff --git a/techpack/display/msm/msm_atomic.c b/techpack/display/msm/msm_atomic.c
+index ddd966d7..b1bc7295 100644
+--- a/techpack/display/msm/msm_atomic.c
++++ b/techpack/display/msm/msm_atomic.c
+@@ -24,6 +24,24 @@
+ 
+ #define MULTIPLE_CONN_DETECTED(x) (x > 1)
+ 
++/* 4.9 vendor reads these two fence fds via OBJ_SETPROPERTY after the frame
++ * commit. They are queries, not additional frames. Keep the existing SDE
++ * fence creation/copy/error paths and serialize access as the 4.9 path did.
++ */
++bool msm_atomic_pe13_legacy_fence(struct drm_mode_object *obj,
++		struct drm_property *prop)
++{
++	struct msm_drm_private *priv = prop->dev->dev_private;
++
++	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) || !priv)
++		return false;
++	if (obj->type == DRM_MODE_OBJECT_CRTC)
++		return prop == priv->crtc_property[CRTC_PROP_OUTPUT_FENCE];
++	if (obj->type == DRM_MODE_OBJECT_CONNECTOR)
++		return prop == priv->conn_property[CONNECTOR_PROP_RETIRE_FENCE];
++	return false;
++}
++
+ struct msm_commit {
+ 	struct drm_device *dev;
+ 	struct drm_atomic_state *state;
+diff --git a/techpack/display/msm/msm_drv.c b/techpack/display/msm/msm_drv.c
+index 1510efce..728de9de 100644
+--- a/techpack/display/msm/msm_drv.c
++++ b/techpack/display/msm/msm_drv.c
+@@ -120,6 +120,7 @@ int msm_atomic_check(struct drm_device *dev,
+ }
+ 
+ static const struct drm_mode_config_funcs mode_config_funcs = {
++	.pe13_legacy_fence = msm_atomic_pe13_legacy_fence,
+ 	.fb_create = msm_framebuffer_create,
+ 	.output_poll_changed = msm_fb_output_poll_changed,
+ 	.atomic_check = msm_atomic_check,
+diff --git a/techpack/display/msm/msm_drv.h b/techpack/display/msm/msm_drv.h
+index 5b20c022..0bad2e96 100644
+--- a/techpack/display/msm/msm_drv.h
++++ b/techpack/display/msm/msm_drv.h
+@@ -733,6 +733,8 @@ struct msm_format {
+ int msm_atomic_prepare_fb(struct drm_plane *plane,
+ 			  struct drm_plane_state *new_state);
+ void msm_atomic_commit_tail(struct drm_atomic_state *state);
++bool msm_atomic_pe13_legacy_fence(struct drm_mode_object *obj,
++		struct drm_property *prop);
+ int msm_atomic_commit(struct drm_device *dev,
+ 	struct drm_atomic_state *state, bool nonblock);
+ 

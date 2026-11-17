@@ -1,0 +1,102 @@
+diff --git a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+index 2e572781ba993b6cbaf502b0f90cc3668092a95e..c0c9e897d97ca3ecd5c6be67d967034fc9e4a6c0 100644
+--- a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
++++ b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+@@ -8,3 +8,6 @@ CONFIG_ENABLE_LEGACY_PFK=y
+ CONFIG_FSCRYPT_LEGACY_ICE_PE13=y
+ CONFIG_QTI_CRYPTO_LEGACY_SCM=y
+ CONFIG_SECURITY_PERF_EVENTS_RESTRICT=y
++# Keep new nodes readable by the original PE13 4.9 filesystem driver.
++# CONFIG_F2FS_FS_COMPRESSION is not set
++CONFIG_F2FS_LEGACY_EXTRA_ATTR_PE13=y
+diff --git a/fs/f2fs/Kconfig b/fs/f2fs/Kconfig
+index 404ac7af2ca7f12e7bef1f2408c0326232ff6c4d..f78ee1139e2c0b5cc8b4e25506236bd093bc4c1f 100644
+--- a/fs/f2fs/Kconfig
++++ b/fs/f2fs/Kconfig
+@@ -99,6 +99,16 @@ config F2FS_FAULT_INJECTION
+ 
+ 	  If unsure, say N.
+ 
++config F2FS_LEGACY_EXTRA_ATTR_PE13
++	bool "Preserve PE13 4.9-compatible F2FS inode allocation"
++	depends on F2FS_FS=y && MACH_XIAOMI_D5X
++	depends on FSCRYPT_LEGACY_ICE_PE13 && !F2FS_FS_COMPRESSION
++	help
++	  Allocate 24-byte extra inode attributes for the original PE13
++	  filesystem, while retaining the normal reader for existing inodes.
++	  Reject filesystem features introduced after the reference 4.9 format.
++	  This does not prove encryption or full kernel rollback compatibility.
++
+ config F2FS_FS_COMPRESSION
+ 	bool "F2FS compression feature"
+ 	depends on F2FS_FS
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+index dd05de692f6a29053810400e6e0192318bdffbab..431e53eeba80f7b962d7db11f4c9cb62681769fc 100644
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -3453,6 +3453,18 @@ static inline int get_inline_xattr_addrs(struct inode *inode)
+ 	offsetof(struct f2fs_inode, i_extra_isize))	\
+ 
+ #define F2FS_OLD_ATTRIBUTE_SIZE	(offsetof(struct f2fs_inode, i_addr))
++static inline unsigned int f2fs_new_inode_extra_isize(void)
++{
++	if (IS_ENABLED(CONFIG_F2FS_LEGACY_EXTRA_ATTR_PE13)) {
++		/* The reference 4.9 layout ends before compression attributes. */
++		BUILD_BUG_ON(offsetof(struct f2fs_inode, i_compr_blocks) -
++			offsetof(struct f2fs_inode, i_extra_isize) != 24);
++		return offsetof(struct f2fs_inode, i_compr_blocks) -
++			offsetof(struct f2fs_inode, i_extra_isize);
++	}
++	return F2FS_TOTAL_EXTRA_ATTR_SIZE;
++}
++
+ #define F2FS_FITS_IN_INODE(f2fs_inode, extra_isize, field)		\
+ 		((offsetof(typeof(*(f2fs_inode)), field) +	\
+ 		sizeof((f2fs_inode)->field))			\
+diff --git a/fs/f2fs/namei.c b/fs/f2fs/namei.c
+index aba377fcc3667b064b1ac23c84562f274fe856f7..813a84e3d943804d49fe49910a30efb361c612b8 100644
+--- a/fs/f2fs/namei.c
++++ b/fs/f2fs/namei.c
+@@ -258,7 +258,7 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode,
+ 
+ 	if (f2fs_sb_has_extra_attr(sbi)) {
+ 		set_inode_flag(inode, FI_EXTRA_ATTR);
+-		F2FS_I(inode)->i_extra_isize = F2FS_TOTAL_EXTRA_ATTR_SIZE;
++		F2FS_I(inode)->i_extra_isize = f2fs_new_inode_extra_isize();
+ 	}
+ 
+ 	if (test_opt(sbi, INLINE_XATTR))
+diff --git a/fs/f2fs/super.c b/fs/f2fs/super.c
+index d9226aef5e86aefe101104c8313800509c39367e..073fc5a36e44de4a4fa892be9b6e5d43e9894db4 100644
+--- a/fs/f2fs/super.c
++++ b/fs/f2fs/super.c
+@@ -4094,6 +4094,19 @@ static void f2fs_tuning_parameters(struct f2fs_sb_info *sbi)
+ 	sbi->readdir_ra = true;
+ }
+ 
++static int f2fs_check_pe13_disk_features(struct f2fs_sb_info *sbi)
++{
++	/* Reference PE13 4.9 defines feature bits 0..11, through SB_CHKSUM. */
++	u32 unsupported = le32_to_cpu(sbi->raw_super->feature) & ~0x0fffU;
++
++	if (IS_ENABLED(CONFIG_F2FS_LEGACY_EXTRA_ATTR_PE13) && unsupported) {
++		f2fs_err(sbi, "Unsupported PE13 rollback filesystem features: 0x%x",
++			 unsupported);
++		return -EOPNOTSUPP;
++	}
++	return 0;
++}
++
+ static int f2fs_fill_super(struct super_block *sb, void *data, int silent)
+ {
+ 	struct f2fs_sb_info *sbi;
+@@ -4159,6 +4172,9 @@ static int f2fs_fill_super(struct super_block *sb, void *data, int silent)
+ 
+ 	sb->s_fs_info = sbi;
+ 	sbi->raw_super = raw_super;
++	err = f2fs_check_pe13_disk_features(sbi);
++	if (err)
++		goto free_sb_buf;
+ 
+ 	memcpy(sbi->errors, raw_super->s_errors, MAX_F2FS_ERRORS);
+ 
