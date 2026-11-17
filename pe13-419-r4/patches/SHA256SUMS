@@ -1,0 +1,4 @@
+650c89aeb99804a44c98500ee299a7ec9b67507ce73d1f9704dd66496ea5e4dd  patches/0001-pe13-legacy-ice.patch
+d2572161fa3b009b04c64ae301370cce495d02b13bf33f78b02d258b6a95effc  patches/0002-pe13-f2fs-rollback-format.patch
+d279794f4b67cf6e0f14d4fbc42d7b1fa46c8785693101e70ff32be80c97c77b  patches/0003-polaris-pe13-thermal-monitor-aliases.patch
+e4d5c9139b95d58c7eb6e4da020231f42a7e682e392d825f65f0ab2922075555  patches/0004-polaris-pe13-shared-rotation.patch
