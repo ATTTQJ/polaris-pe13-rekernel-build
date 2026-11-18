@@ -1,0 +1,28 @@
+diff --git a/techpack/display/msm/sde/sde_kms.c b/techpack/display/msm/sde/sde_kms.c
+index fda79db3..c036e902 100644
+--- a/techpack/display/msm/sde/sde_kms.c
++++ b/techpack/display/msm/sde/sde_kms.c
+@@ -2577,6 +2577,14 @@ static int _sde_kms_update_planes_for_cont_splash(struct sde_kms *sde_kms,
+ 	return 0;
+ }
+ 
++static void sde_kms_pe13_splash_vblank_on(struct drm_crtc *crtc)
++{
++	/* Balance the initial reset for the display adopted from firmware. */
++	if (IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) && crtc && crtc->state &&
++			crtc->state->active && crtc->state->enable)
++		drm_crtc_vblank_on(crtc);
++}
++
+ static int sde_kms_cont_splash_config(struct msm_kms *kms)
+ {
+ 	void *display;
+@@ -2725,6 +2733,8 @@ static int sde_kms_cont_splash_config(struct msm_kms *kms)
+ 			SDE_ERROR("Failed: updating plane status rc=%d\n", rc);
+ 			return rc;
+ 		}
++
++		sde_kms_pe13_splash_vblank_on(crtc);
+ 	}
+ 
+ 	return rc;

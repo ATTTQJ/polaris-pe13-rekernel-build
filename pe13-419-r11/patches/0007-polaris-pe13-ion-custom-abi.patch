@@ -1,0 +1,175 @@
+diff --git a/drivers/staging/android/ion/compat_ion.c b/drivers/staging/android/ion/compat_ion.c
+index 22c102ce..e315ffb8 100644
+--- a/drivers/staging/android/ion/compat_ion.c
++++ b/drivers/staging/android/ion/compat_ion.c
+@@ -43,6 +43,13 @@ struct compat_ion_pe13_flush_data {
+ 	compat_uint_t length;
+ };
+ 
++struct compat_ion_pe13_custom_data {
++	compat_uint_t cmd;
++	compat_uptr_t arg;
++};
++
++#define COMPAT_ION_PE13_IOC_CUSTOM _IOWR('I', 6, struct compat_ion_pe13_custom_data)
++
+ #define COMPAT_ION_PE13_IOC_CLEAN _IOWR('M', 0, struct compat_ion_pe13_flush_data)
+ #define COMPAT_ION_PE13_IOC_INV _IOWR('M', 1, struct compat_ion_pe13_flush_data)
+ #define COMPAT_ION_PE13_IOC_CLEAN_INV _IOWR('M', 2, struct compat_ion_pe13_flush_data)
+@@ -111,6 +118,35 @@ static int compat_put_ion_allocation_data(
+ 	return err;
+ }
+ 
++static long compat_ion_pe13_cache_ioctl(unsigned int cmd, unsigned long arg)
++{
++	struct compat_ion_pe13_flush_data data;
++	struct ion_pe13_flush_data flush;
++	void __user *payload = compat_ptr(arg);
++
++	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
++		return -ENOIOCTLCMD;
++	if (cmd == COMPAT_ION_PE13_IOC_CUSTOM) {
++		struct compat_ion_pe13_custom_data custom;
++
++		if (copy_from_user(&custom, payload, sizeof(custom)))
++			return -EFAULT;
++		cmd = custom.cmd;
++		payload = compat_ptr(custom.arg);
++	}
++	if (cmd != COMPAT_ION_PE13_IOC_CLEAN && cmd != COMPAT_ION_PE13_IOC_INV &&
++			cmd != COMPAT_ION_PE13_IOC_CLEAN_INV)
++		return -ENOIOCTLCMD;
++	if (copy_from_user(&data, payload, sizeof(data)))
++		return -EFAULT;
++	flush.handle = data.handle;
++	flush.fd = data.fd;
++	flush.vaddr = NULL; /* Cache operations use only the owned dma-buf. */
++	flush.offset = data.offset;
++	flush.length = data.length;
++	return ion_pe13_cache_flush(&flush, _IOC_NR(cmd));
++}
++
+ long compat_ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ {
+ 	long ret;
+@@ -159,18 +195,8 @@ long compat_ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	case COMPAT_ION_PE13_IOC_CLEAN:
+ 	case COMPAT_ION_PE13_IOC_INV:
+ 	case COMPAT_ION_PE13_IOC_CLEAN_INV:
+-	{
+-		struct compat_ion_pe13_flush_data data;
+-		int fd;
+-
+-		if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
+-			return -ENOIOCTLCMD;
+-		if (copy_from_user(&data, compat_ptr(arg), sizeof(data)))
+-			return -EFAULT;
+-		fd = data.fd >= 0 ? data.fd : data.handle;
+-		return ion_pe13_cache_sync(fd, data.offset, data.length,
+-				_IOC_NR(cmd));
+-	}
++	case COMPAT_ION_PE13_IOC_CUSTOM:
++		return compat_ion_pe13_cache_ioctl(cmd, arg);
+ 	case ION_IOC_SHARE:
+ 	case ION_IOC_MAP:
+ 	case ION_IOC_IMPORT:
+diff --git a/drivers/staging/android/ion/ion-ioctl.c b/drivers/staging/android/ion/ion-ioctl.c
+index d39a1867..db215daf 100644
+--- a/drivers/staging/android/ion/ion-ioctl.c
++++ b/drivers/staging/android/ion/ion-ioctl.c
+@@ -24,6 +24,7 @@ union ion_ioctl_arg {
+ 	struct ion_old_allocation_data old_allocation;
+ 	struct ion_handle_data handle;
+ 	struct ion_pe13_flush_data pe13_flush;
++	struct ion_pe13_custom_data pe13_custom;
+ #endif
+ };
+ 
+@@ -56,6 +57,23 @@ static unsigned int ion_ioctl_dir(unsigned int cmd)
+ 	}
+ }
+ 
++#ifdef CONFIG_ION_LEGACY
++static long ion_pe13_custom_ioctl(const struct ion_pe13_custom_data *custom)
++{
++	struct ion_pe13_flush_data flush;
++	unsigned int nested = custom->cmd;
++
++	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
++		return -ENOTTY;
++	if (nested != ION_PE13_IOC_CLEAN && nested != ION_PE13_IOC_INV &&
++			nested != ION_PE13_IOC_CLEAN_INV)
++		return -ENOTTY;
++	if (copy_from_user(&flush, (void __user *)custom->arg, sizeof(flush)))
++		return -EFAULT;
++	return ion_pe13_cache_flush(&flush, _IOC_NR(nested));
++}
++#endif
++
+ long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ {
+ 	int ret = 0;
+@@ -167,16 +185,13 @@ long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	case ION_PE13_IOC_INV:
+ 	case ION_PE13_IOC_CLEAN_INV:
+ 	{
+-		int fd;
+-
+ 		if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13))
+ 			return -ENOTTY;
+-		fd = data.pe13_flush.fd >= 0 ? data.pe13_flush.fd :
+-			data.pe13_flush.handle;
+-		ret = ion_pe13_cache_sync(fd, data.pe13_flush.offset,
+-				data.pe13_flush.length, _IOC_NR(cmd));
++		ret = ion_pe13_cache_flush(&data.pe13_flush, _IOC_NR(cmd));
+ 		break;
+ 	}
++	case ION_PE13_IOC_CUSTOM:
++		return ion_pe13_custom_ioctl(&data.pe13_custom);
+ #endif
+ 	default:
+ 		return -ENOTTY;
+diff --git a/drivers/staging/android/ion/ion.c b/drivers/staging/android/ion/ion.c
+index 17d2d133..1cef8d97 100644
+--- a/drivers/staging/android/ion/ion.c
++++ b/drivers/staging/android/ion/ion.c
+@@ -1085,6 +1085,14 @@ int ion_pe13_cache_sync(int fd, unsigned int offset, unsigned int length,
+ 	dma_buf_put(dmabuf);
+ 	return ret;
+ }
++/* The pre-4.12 shim uses dma-buf fds as handles. Match 4.9 handle priority. */
++int ion_pe13_cache_flush(const struct ion_pe13_flush_data *data, unsigned int op)
++{
++	int fd = data->handle > 0 ? data->handle : data->fd;
++
++	return ion_pe13_cache_sync(fd, data->offset, data->length, op);
++}
++
+ #endif
+ 
+ struct dma_buf *ion_alloc_dmabuf(size_t len, unsigned int heap_id_mask,
+diff --git a/drivers/staging/android/ion/ion_legacy.h b/drivers/staging/android/ion/ion_legacy.h
+index 8e25bde8..91ea3fc4 100644
+--- a/drivers/staging/android/ion/ion_legacy.h
++++ b/drivers/staging/android/ion/ion_legacy.h
+@@ -105,12 +105,20 @@ struct ion_pe13_flush_data {
+ 	unsigned int length;
+ };
+ 
++struct ion_pe13_custom_data {
++	unsigned int cmd;
++	unsigned long arg;
++};
++
++#define ION_PE13_IOC_CUSTOM _IOWR(ION_IOC_MAGIC, 6, struct ion_pe13_custom_data)
++
+ #define ION_PE13_IOC_CLEAN _IOWR('M', 0, struct ion_pe13_flush_data)
+ #define ION_PE13_IOC_INV _IOWR('M', 1, struct ion_pe13_flush_data)
+ #define ION_PE13_IOC_CLEAN_INV _IOWR('M', 2, struct ion_pe13_flush_data)
+ 
+ int ion_pe13_cache_sync(int fd, unsigned int offset, unsigned int length,
+ 		unsigned int op);
++int ion_pe13_cache_flush(const struct ion_pe13_flush_data *data, unsigned int op);
+ 
+ #endif /* CONFIG_ION_LEGACY */
+ 

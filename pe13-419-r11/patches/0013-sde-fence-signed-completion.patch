@@ -1,0 +1,14 @@
+diff --git a/techpack/display/msm/sde/sde_fence.c b/techpack/display/msm/sde/sde_fence.c
+index eb9b8fb5..525d018c 100644
+--- a/techpack/display/msm/sde/sde_fence.c
++++ b/techpack/display/msm/sde/sde_fence.c
+@@ -131,7 +131,8 @@ static bool sde_fence_signaled(struct dma_fence *fence)
+ 	struct sde_fence *f = to_sde_fence(fence);
+ 	bool status;
+ 
+-	status = (int)((fence->seqno - f->ctx->done_count) <= 0);
++	/* Compare the signed sequence delta, including completed older fences. */
++	status = (s32)(fence->seqno - f->ctx->done_count) <= 0;
+ 	SDE_DEBUG("status:%d fence seq:%d and timeline:%d\n",
+ 			status, fence->seqno, f->ctx->done_count);
+ 	return status;

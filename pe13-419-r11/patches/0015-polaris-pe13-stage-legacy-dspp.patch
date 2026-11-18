@@ -1,0 +1,173 @@
+diff --git a/drivers/gpu/drm/drm_mode_object.c b/drivers/gpu/drm/drm_mode_object.c
+index 45c4dc98..1a49f04a 100644
+--- a/drivers/gpu/drm/drm_mode_object.c
++++ b/drivers/gpu/drm/drm_mode_object.c
+@@ -496,7 +496,7 @@ static int set_property_atomic(struct drm_mode_object *obj,
+ 	return ret;
+ }
+ 
+-static int set_property_pe13_fence(struct drm_mode_object *obj,
++static int set_property_pe13_legacy(struct drm_mode_object *obj,
+ 		struct drm_property *prop, uint64_t value)
+ {
+ 	struct drm_device *dev = prop->dev;
+@@ -505,8 +505,8 @@ static int set_property_pe13_fence(struct drm_mode_object *obj,
+ 
+ 	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) ||
+ 			!dev->mode_config.funcs ||
+-			!dev->mode_config.funcs->pe13_legacy_fence ||
+-			!dev->mode_config.funcs->pe13_legacy_fence(obj, prop))
++			!dev->mode_config.funcs->pe13_legacy_property ||
++			!dev->mode_config.funcs->pe13_legacy_property(obj, prop))
+ 		return -ENOIOCTLCMD;
+ 	if (!drm_property_change_valid_get(prop, value, &ref))
+ 		return -EINVAL;
+@@ -552,7 +552,7 @@ int drm_mode_obj_set_property_ioctl(struct drm_device *dev, void *data,
+ 	if (!property)
+ 		goto out_unref;
+ 
+-	ret = set_property_pe13_fence(arg_obj, property, arg->value);
++	ret = set_property_pe13_legacy(arg_obj, property, arg->value);
+ 	if (ret != -ENOIOCTLCMD)
+ 		goto out_unref;
+ 
+diff --git a/include/drm/drm_mode_config.h b/include/drm/drm_mode_config.h
+index 35814ba7..fd89b4b3 100644
+--- a/include/drm/drm_mode_config.h
++++ b/include/drm/drm_mode_config.h
+@@ -329,14 +329,13 @@ struct drm_mode_config_funcs {
+ 	 */
+ 	void (*atomic_state_free)(struct drm_atomic_state *state);
+ 	/**
+-	 * @pe13_legacy_fence:
+-	 * Optional PE13 compatibility for legacy vendor fence-property queries.
+-	 * Called after object access and property membership checks. Select only
+-	 * metadata queries; the core validates the value and calls the existing
+-	 * atomic property setter under modeset locks, without a frame commit.
+-	 * The selector itself must not modify state.
+-	 */
+-	bool (*pe13_legacy_fence)(struct drm_mode_object *obj,
++	 * @pe13_legacy_property:
++	 * Optional PE13 compatibility for properties whose legacy ABI does not
++	 * commit a frame. After access, membership and value validation, the
++	 * core calls the existing setter on current state under modeset locks.
++	 * This selector must not modify state.
++	 */
++	bool (*pe13_legacy_property)(struct drm_mode_object *obj,
+ 			struct drm_property *prop);
+ 
+ };
+diff --git a/techpack/display/msm/msm_atomic.c b/techpack/display/msm/msm_atomic.c
+index b1bc7295..ca75e5c7 100644
+--- a/techpack/display/msm/msm_atomic.c
++++ b/techpack/display/msm/msm_atomic.c
+@@ -20,15 +20,15 @@
+ #include "msm_drv.h"
+ #include "msm_gem.h"
+ #include "msm_kms.h"
++#include "sde/sde_color_processing.h"
+ #include "sde_trace.h"
+ 
+ #define MULTIPLE_CONN_DETECTED(x) (x > 1)
+ 
+-/* 4.9 vendor reads these two fence fds via OBJ_SETPROPERTY after the frame
+- * commit. They are queries, not additional frames. Keep the existing SDE
+- * fence creation/copy/error paths and serialize access as the 4.9 path did.
++/* The PE13 composer queries fence fds after commit and stages DSPP color
++ * properties before commit. Both paths used the current-state setter in 4.9.
+  */
+-bool msm_atomic_pe13_legacy_fence(struct drm_mode_object *obj,
++bool msm_atomic_pe13_legacy_property(struct drm_mode_object *obj,
+ 		struct drm_property *prop)
+ {
+ 	struct msm_drm_private *priv = prop->dev->dev_private;
+@@ -36,7 +36,9 @@ bool msm_atomic_pe13_legacy_fence(struct drm_mode_object *obj,
+ 	if (!IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) || !priv)
+ 		return false;
+ 	if (obj->type == DRM_MODE_OBJECT_CRTC)
+-		return prop == priv->crtc_property[CRTC_PROP_OUTPUT_FENCE];
++		return prop == priv->crtc_property[CRTC_PROP_OUTPUT_FENCE] ||
++			(IS_ENABLED(CONFIG_DRM_MSM_SDE) &&
++			 sde_cp_pe13_legacy_color_property(priv, prop));
+ 	if (obj->type == DRM_MODE_OBJECT_CONNECTOR)
+ 		return prop == priv->conn_property[CONNECTOR_PROP_RETIRE_FENCE];
+ 	return false;
+diff --git a/techpack/display/msm/msm_drv.c b/techpack/display/msm/msm_drv.c
+index 728de9de..865b42ee 100644
+--- a/techpack/display/msm/msm_drv.c
++++ b/techpack/display/msm/msm_drv.c
+@@ -120,7 +120,7 @@ int msm_atomic_check(struct drm_device *dev,
+ }
+ 
+ static const struct drm_mode_config_funcs mode_config_funcs = {
+-	.pe13_legacy_fence = msm_atomic_pe13_legacy_fence,
++	.pe13_legacy_property = msm_atomic_pe13_legacy_property,
+ 	.fb_create = msm_framebuffer_create,
+ 	.output_poll_changed = msm_fb_output_poll_changed,
+ 	.atomic_check = msm_atomic_check,
+diff --git a/techpack/display/msm/msm_drv.h b/techpack/display/msm/msm_drv.h
+index 0bad2e96..e0ad9581 100644
+--- a/techpack/display/msm/msm_drv.h
++++ b/techpack/display/msm/msm_drv.h
+@@ -733,7 +733,7 @@ struct msm_format {
+ int msm_atomic_prepare_fb(struct drm_plane *plane,
+ 			  struct drm_plane_state *new_state);
+ void msm_atomic_commit_tail(struct drm_atomic_state *state);
+-bool msm_atomic_pe13_legacy_fence(struct drm_mode_object *obj,
++bool msm_atomic_pe13_legacy_property(struct drm_mode_object *obj,
+ 		struct drm_property *prop);
+ int msm_atomic_commit(struct drm_device *dev,
+ 	struct drm_atomic_state *state, bool nonblock);
+diff --git a/techpack/display/msm/sde/sde_color_processing.c b/techpack/display/msm/sde/sde_color_processing.c
+index d60ff7a5..4fae17ed 100644
+--- a/techpack/display/msm/sde/sde_color_processing.c
++++ b/techpack/display/msm/sde/sde_color_processing.c
+@@ -1923,6 +1923,33 @@ void sde_cp_crtc_install_properties(struct drm_crtc *crtc)
+ 
+ }
+ 
++bool sde_cp_pe13_legacy_color_property(const struct msm_drm_private *priv,
++		const struct drm_property *property)
++{
++	static const enum sde_cp_crtc_features staged[] = {
++		SDE_CP_CRTC_DSPP_IGC,
++		SDE_CP_CRTC_DSPP_PCC,
++		SDE_CP_CRTC_DSPP_GC,
++		SDE_CP_CRTC_DSPP_HSIC,
++		SDE_CP_CRTC_DSPP_MEMCOL_SKIN,
++		SDE_CP_CRTC_DSPP_MEMCOL_SKY,
++		SDE_CP_CRTC_DSPP_MEMCOL_FOLIAGE,
++		SDE_CP_CRTC_DSPP_MEMCOL_PROT,
++		SDE_CP_CRTC_DSPP_SIXZONE,
++		SDE_CP_CRTC_DSPP_GAMUT,
++	};
++	size_t i;
++
++	if (!priv->cp_property || !(property->flags & DRM_MODE_PROP_BLOB))
++		return false;
++
++	for (i = 0; i < ARRAY_SIZE(staged); i++)
++		if (priv->cp_property[staged[i]] == property)
++			return true;
++
++	return false;
++}
++
+ int sde_cp_crtc_set_property(struct drm_crtc *crtc,
+ 				struct drm_property *property,
+ 				uint64_t val)
+diff --git a/techpack/display/msm/sde/sde_color_processing.h b/techpack/display/msm/sde/sde_color_processing.h
+index 277e3e6f..70270993 100644
+--- a/techpack/display/msm/sde/sde_color_processing.h
++++ b/techpack/display/msm/sde/sde_color_processing.h
+@@ -8,6 +8,10 @@
+ #include <drm/drm_crtc.h>
+ 
+ struct sde_irq_callback;
++struct msm_drm_private;
++
++bool sde_cp_pe13_legacy_color_property(const struct msm_drm_private *priv,
++		const struct drm_property *property);
+ 
+ /*
+  * PA MEMORY COLOR types

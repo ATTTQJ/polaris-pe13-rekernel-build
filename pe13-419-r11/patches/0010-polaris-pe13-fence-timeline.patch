@@ -1,0 +1,93 @@
+diff --git a/techpack/display/msm/sde/sde_connector.c b/techpack/display/msm/sde/sde_connector.c
+index 8149304f..148112c9 100644
+--- a/techpack/display/msm/sde/sde_connector.c
++++ b/techpack/display/msm/sde/sde_connector.c
+@@ -1417,6 +1417,15 @@ static int _sde_connector_set_ext_hdr_info(
+ 	return rc;
+ }
+ 
++static uint32_t _sde_connector_retire_fence_offset(
++		struct drm_connector *connector,
++		const struct drm_connector_state *state)
++{
++	/* The legacy query follows commit; the atomic-list query precedes it. */
++	return IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) &&
++		state == connector->state ? 0 : 1;
++}
++
+ static int sde_connector_atomic_set_property(struct drm_connector *connector,
+ 		struct drm_connector_state *state,
+ 		struct drm_property *property,
+@@ -1493,7 +1502,8 @@ static int sde_connector_atomic_set_property(struct drm_connector *connector,
+ 			 * commit completion
+ 			 */
+ 			rc = sde_fence_create(c_conn->retire_fence,
+-						&fence_user_fd, 1);
++						&fence_user_fd,
++				_sde_connector_retire_fence_offset(connector, state));
+ 			if (rc) {
+ 				SDE_ERROR("fence create failed rc:%d\n", rc);
+ 				goto end;
+diff --git a/techpack/display/msm/sde/sde_crtc.c b/techpack/display/msm/sde/sde_crtc.c
+index 8ed05e1b..a68a24a9 100644
+--- a/techpack/display/msm/sde/sde_crtc.c
++++ b/techpack/display/msm/sde/sde_crtc.c
+@@ -5408,17 +5408,31 @@ static void sde_crtc_install_properties(struct drm_crtc *crtc,
+ 	vfree(info);
+ }
+ 
++static uint32_t _sde_crtc_output_fence_offset(struct drm_crtc *crtc,
++		const struct drm_crtc_state *state, bool is_vid)
++{
++	struct sde_crtc_state *cstate = to_sde_crtc_state(state);
++	uint32_t offset = sde_crtc_get_property(cstate,
++			CRTC_PROP_OUTPUT_FENCE_OFFSET);
++
++	/* The legacy ioctl queries the already submitted frame. Atomic-list
++	 * queries use a new state before prepare_commit advances the timeline.
++	 * Current-state access is serialized by the PE13 DRM core path.
++	 */
++	if (IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) && state == crtc->state)
++		return is_vid ? offset + 1 : 0;
++	return offset + (is_vid ? 1 : 0) + 1;
++}
++
+ static int _sde_crtc_get_output_fence(struct drm_crtc *crtc,
+ 	const struct drm_crtc_state *state, uint64_t *val)
+ {
+ 	struct sde_crtc *sde_crtc;
+-	struct sde_crtc_state *cstate;
+ 	uint32_t offset;
+ 	bool is_vid = false;
+ 	struct drm_encoder *encoder;
+ 
+ 	sde_crtc = to_sde_crtc(crtc);
+-	cstate = to_sde_crtc_state(state);
+ 
+ 	drm_for_each_encoder_mask(encoder, crtc->dev, state->encoder_mask) {
+ 		if (sde_encoder_check_curr_mode(encoder,
+@@ -5428,23 +5442,7 @@ static int _sde_crtc_get_output_fence(struct drm_crtc *crtc,
+ 			break;
+ 	}
+ 
+-	offset = sde_crtc_get_property(cstate, CRTC_PROP_OUTPUT_FENCE_OFFSET);
+-
+-	/*
+-	 * Increment trigger offset for vidoe mode alone as its release fence
+-	 * can be triggered only after the next frame-update. For cmd mode &
+-	 * virtual displays the release fence for the current frame can be
+-	 * triggered right after PP_DONE/WB_DONE interrupt
+-	 */
+-	if (is_vid)
+-		offset++;
+-
+-	/*
+-	 * Hwcomposer now queries the fences using the commit list in atomic
+-	 * commit ioctl. The offset should be set to next timeline
+-	 * which will be incremented during the prepare commit phase
+-	 */
+-	offset++;
++	offset = _sde_crtc_output_fence_offset(crtc, state, is_vid);
+ 
+ 	return sde_fence_create(sde_crtc->output_fence, val, offset);
+ }
