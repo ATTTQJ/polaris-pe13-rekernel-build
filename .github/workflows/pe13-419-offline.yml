@@ -1,7 +1,7 @@
-name: Polaris 4.19 Smoothness Edition build
+name: Polaris PE13 4.19 r12 dither candidate
 on:
   push:
-    branches: ['codex/polaris-419-smoothness']
+    branches: ['codex/polaris-419-dither']
     paths: ['pe13-419-r11/**', '.github/workflows/pe13-419-offline.yml']
   workflow_dispatch:
 permissions:
@@ -27,7 +27,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: polaris-419-smoothness-NOT-FOR-FLASHING
+          name: polaris-pe13-r12-NOT-FOR-FLASHING
           path: |
             ${{ runner.temp }}/pe13-419-build/*.log
             ${{ runner.temp }}/pe13-419-build/*.json

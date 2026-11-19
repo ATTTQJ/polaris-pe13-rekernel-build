@@ -46,6 +46,7 @@ python3 "$package/tests/check_sde_fence_completion.py" --kernel "$PWD" --cc clan
 python3 "$package/tests/check_pe13_splash_vblank.py" --kernel "$PWD" --cc clang-16
 python3 "$package/tests/check_rekernel_compat.py" --kernel "$PWD" --cc clang-16
 python3 "$package/tests/check_pe13_boost_abi.py" --kernel "$PWD" --cc clang-16
+python3 "$package/tests/check_pe13_dither_noop.py" --kernel "$PWD" --cc clang-16
 mkdir "$build_root/artifacts"
 if [[ ${PE13_DTB_ONLY:-0} == 1 ]]; then
     mapfile -t dtb_targets < <(find arch/arm64/boot/dts/xiaomi/polaris -maxdepth 1 -name '*.dts' ! -name '*-overlay.dts' -printf 'xiaomi/polaris/%f\n' | sed 's/\.dts$/.dtb/' | LC_ALL=C sort)
@@ -57,7 +58,7 @@ if [[ ${PE13_DTB_ONLY:-0} == 1 ]]; then
 else
     make -j"${JOBS:-4}" "${args[@]}" Image.gz-dtb |& tee "$build_root/build.log"
     test -s out/arch/arm64/boot/Image.gz-dtb
-    cp out/arch/arm64/boot/Image.gz-dtb "$build_root/artifacts/pe13-419-r11-NOT-FOR-FLASHING.bin"
+    cp out/arch/arm64/boot/Image.gz-dtb "$build_root/artifacts/pe13-419-r12-NOT-FOR-FLASHING.bin"
 fi
 cp out/.config "$build_root/artifacts/kernel.config"
 sha256sum "$build_root/artifacts/"* > "$build_root/artifacts/SHA256SUMS"

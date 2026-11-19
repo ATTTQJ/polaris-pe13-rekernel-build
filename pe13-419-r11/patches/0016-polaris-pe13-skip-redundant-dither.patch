@@ -1,0 +1,145 @@
+diff --git a/drivers/gpu/drm/drm_mode_object.c b/drivers/gpu/drm/drm_mode_object.c
+index 1a49f04a3701638fb4fd1d4e28e5447a49abc611..366e51939545f3d35f0cc417be847bfbc812d62a 100644
+--- a/drivers/gpu/drm/drm_mode_object.c
++++ b/drivers/gpu/drm/drm_mode_object.c
+@@ -479,6 +479,12 @@ static int set_property_atomic(struct drm_mode_object *obj,
+ 		ret = drm_atomic_set_property(state, obj, prop, prop_value);
+ 		if (ret)
+ 			goto out;
++		if (IS_ENABLED(CONFIG_FSCRYPT_LEGACY_ICE_PE13) &&
++		    dev->mode_config.funcs &&
++		    dev->mode_config.funcs->pe13_legacy_noop &&
++		    dev->mode_config.funcs->pe13_legacy_noop(state, obj, prop,
++							    prop_value))
++			goto out;
+ 		ret = drm_atomic_commit(state);
+ 	}
+ out:
+diff --git a/include/drm/drm_mode_config.h b/include/drm/drm_mode_config.h
+index fd89b4b3d5b1f9f48bde5d9439c6f04ac36e8e9d..0001cb696f9c9ee0a81c65dab411f5d00d1de1dc 100644
+--- a/include/drm/drm_mode_config.h
++++ b/include/drm/drm_mode_config.h
+@@ -337,6 +337,15 @@ struct drm_mode_config_funcs {
+ 	 */
+ 	bool (*pe13_legacy_property)(struct drm_mode_object *obj,
+ 			struct drm_property *prop);
++	/**
++	 * @pe13_legacy_noop:
++	 * Optional PE13 optimization for a legacy single-property update.
++	 * Called after drm_atomic_set_property with modeset locks held. Return
++	 * true only when applying the staged update has no hardware work to do.
++	 */
++	bool (*pe13_legacy_noop)(struct drm_atomic_state *state,
++			struct drm_mode_object *obj, struct drm_property *prop,
++			uint64_t value);
+ 
+ };
+ 
+diff --git a/techpack/display/msm/msm_atomic.c b/techpack/display/msm/msm_atomic.c
+index ca75e5c7b7d5d026cabe271b3c1b1e95d214358e..5b6e2f8f5418e5e24bd23fbe06eea34577011c00 100644
+--- a/techpack/display/msm/msm_atomic.c
++++ b/techpack/display/msm/msm_atomic.c
+@@ -20,7 +20,9 @@
+ #include "msm_drv.h"
+ #include "msm_gem.h"
+ #include "msm_kms.h"
++#include "dsi/dsi_display.h"
+ #include "sde/sde_color_processing.h"
++#include "sde/sde_connector.h"
+ #include "sde_trace.h"
+ 
+ #define MULTIPLE_CONN_DETECTED(x) (x > 1)
+@@ -44,6 +46,67 @@ bool msm_atomic_pe13_legacy_property(struct drm_mode_object *obj,
+ 	return false;
+ }
+ 
++bool msm_atomic_pe13_legacy_noop(struct drm_atomic_state *state,
++		struct drm_mode_object *obj, struct drm_property *prop,
++		uint64_t value)
++{
++	struct msm_drm_private *priv = state->dev->dev_private;
++	struct drm_connector_state *conn_state;
++	struct drm_crtc_state *crtc_state;
++	struct drm_connector *connector;
++	struct sde_connector *sde_conn;
++	struct dsi_display *display;
++	bool pending, ready;
++
++	if (!IS_ENABLED(CONFIG_DRM_MSM_SDE) || !priv || value ||
++	    obj->type != DRM_MODE_OBJECT_CONNECTOR ||
++	    prop != priv->conn_property[CONNECTOR_PROP_PP_DITHER] ||
++	    !(prop->flags & DRM_MODE_PROP_BLOB) ||
++	    READ_ONCE(priv->shutdown_in_progress))
++		return false;
++
++	connector = obj_to_connector(obj);
++	if (connector->connector_type != DRM_MODE_CONNECTOR_DSI ||
++	    connector->status != connector_status_connected)
++		return false;
++
++	conn_state = drm_atomic_get_old_connector_state(state, connector);
++	if (!conn_state || !conn_state->crtc ||
++	    sde_connector_get_property(conn_state, CONNECTOR_PROP_PP_DITHER) ||
++	    sde_connector_get_property(conn_state, CONNECTOR_PROP_LP) !=
++			SDE_MODE_DPMS_ON)
++		return false;
++	crtc_state = drm_atomic_get_old_crtc_state(state, conn_state->crtc);
++	if (!crtc_state || !crtc_state->enable || !crtc_state->active ||
++	    drm_atomic_crtc_needs_modeset(crtc_state))
++		return false;
++
++	/* A previous commit can still be programming hardware after its swap. */
++	spin_lock(&priv->pending_crtcs_event.lock);
++	pending = (priv->pending_crtcs & drm_crtc_mask(conn_state->crtc)) ||
++		  priv->pending_planes;
++	spin_unlock(&priv->pending_crtcs_event.lock);
++	if (pending)
++		return false;
++
++	sde_conn = to_sde_connector(connector);
++	display = sde_conn->display;
++	if (!display || !display->panel || !mutex_trylock(&sde_conn->lock))
++		return false;
++	/* Value 0 selects the already installed default PP dither blob. */
++	ready = sde_conn->blob_dither &&
++		sde_conn->dpms_mode == DRM_MODE_DPMS_ON &&
++		sde_conn->last_panel_power_mode == SDE_MODE_DPMS_ON &&
++		READ_ONCE(sde_conn->allow_bl_update) &&
++		!READ_ONCE(sde_conn->panel_dead) &&
++		!READ_ONCE(sde_conn->bl_scale_dirty) &&
++		READ_ONCE(display->panel->panel_initialized) &&
++		!READ_ONCE(display->is_cont_splash_enabled) &&
++		!READ_ONCE(display->poms_pending);
++	mutex_unlock(&sde_conn->lock);
++	return ready;
++}
++
+ struct msm_commit {
+ 	struct drm_device *dev;
+ 	struct drm_atomic_state *state;
+diff --git a/techpack/display/msm/msm_drv.c b/techpack/display/msm/msm_drv.c
+index 865b42ee9845fdc6f73103454231e00d69f8bb49..b8a806513a1baea7ef830e481da713f42ebfdf32 100644
+--- a/techpack/display/msm/msm_drv.c
++++ b/techpack/display/msm/msm_drv.c
+@@ -121,6 +121,7 @@ int msm_atomic_check(struct drm_device *dev,
+ 
+ static const struct drm_mode_config_funcs mode_config_funcs = {
+ 	.pe13_legacy_property = msm_atomic_pe13_legacy_property,
++	.pe13_legacy_noop = msm_atomic_pe13_legacy_noop,
+ 	.fb_create = msm_framebuffer_create,
+ 	.output_poll_changed = msm_fb_output_poll_changed,
+ 	.atomic_check = msm_atomic_check,
+diff --git a/techpack/display/msm/msm_drv.h b/techpack/display/msm/msm_drv.h
+index e0ad95812df4091d7dec14ec36fb1f7cd679b625..f33ffcde11dae2afcd9122ff2dc4d1dc2687c924 100644
+--- a/techpack/display/msm/msm_drv.h
++++ b/techpack/display/msm/msm_drv.h
+@@ -735,6 +735,9 @@ int msm_atomic_prepare_fb(struct drm_plane *plane,
+ void msm_atomic_commit_tail(struct drm_atomic_state *state);
+ bool msm_atomic_pe13_legacy_property(struct drm_mode_object *obj,
+ 		struct drm_property *prop);
++bool msm_atomic_pe13_legacy_noop(struct drm_atomic_state *state,
++		struct drm_mode_object *obj, struct drm_property *prop,
++		uint64_t value);
+ int msm_atomic_commit(struct drm_device *dev,
+ 	struct drm_atomic_state *state, bool nonblock);
+ 
