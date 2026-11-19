@@ -36,6 +36,10 @@ args=(O=out CC=clang-16 LD=ld.lld-16 AR=llvm-ar-16 NM=llvm-nm-16 OBJCOPY=llvm-ob
 { clang-16 --version; ld.lld-16 --version; aarch64-linux-gnu-gcc --version; arm-linux-gnueabi-gcc --version; dpkg-query -W; } > "$build_root/toolchain.txt"
 make "${args[@]}" vendor/sdm845-perf_defconfig vendor/xiaomi/sdm845-common.config vendor/xiaomi/polaris.config vendor/xiaomi/polaris-pe13.config |& tee "$build_root/config.log"
 python3 "$package/scripts/check_config.py" out/.config | tee "$build_root/config-check.json"
+if [[ -f "$package/patches/08-config/0001-polaris-smoothness-thinlto-experiment.patch" ]]; then
+    grep -qx 'CONFIG_LTO_CLANG=y' out/.config
+    grep -qx 'CONFIG_THINLTO=y' out/.config
+fi
 python3 "$package/tests/run_host_checks.py" --kernel "$PWD" --cc clang-16
 python3 "$package/tests/check_f2fs_layout.py" --kernel "$PWD" --cc clang-16
 python3 "$package/tests/check_pe13_rotation.py" --kernel "$PWD" --cc clang-16

@@ -13,3 +13,4 @@ f196c21482af1cd792bb18f70a15fb5abcdb4311cac56d3193f88b44cb104e58  patches/0009-p
 355a442ef065f15b97d967ea7ab1fd584e442a856cc2bc058fb53e4c6a75e3f4  patches/0013-sde-fence-signed-completion.patch
 a1e22e881c01b5297dd16c0c7afc168750f557005de46542cc00c05c8137bb73  patches/0014-polaris-pe13-splash-vblank.patch
 0389c6992b6d5c0b2535907a2b1d0618e98b7dcae7badb44281b6edbc0e8dff7  patches/0015-polaris-pe13-stage-legacy-dspp.patch
+e5f7950cce78c0131f37aea2b917bca42ac1d97b1c0f90cf66f4e4715df8bd31  patches/08-config/0001-polaris-smoothness-thinlto-experiment.patch
