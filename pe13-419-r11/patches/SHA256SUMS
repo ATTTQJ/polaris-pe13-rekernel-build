@@ -19,3 +19,4 @@ a1e22e881c01b5297dd16c0c7afc168750f557005de46542cc00c05c8137bb73  patches/0014-p
 8a82b8748a12234779e9c51c59e791522ca8f79d5973f5912686bc9cb89f68aa  patches/0019-uclamp-schedtune-walt.patch
 83891788a88288f16f4814fbc3a433061f5e436a14e00ff46edb17d930b6115e  patches/0020-polaris-backport-config.patch
 d9d189f8ed9b64de3b09a82d1dcce04c27f43c08156e625425798c32a57d1a0b  patches/0021-mglru-polaris.patch
+4c69363b4a393a7db3d0fd937a226c9dbef870bb24255f763790b4712f7e0ce5  patches/0022-mglru-accounting-and-arm64-compat.patch
