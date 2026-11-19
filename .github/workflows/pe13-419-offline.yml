@@ -1,7 +1,7 @@
-name: PE13 Polaris 4.19 r11 full kernel
+name: Polaris 4.19 Smoothness Edition build
 on:
   push:
-    branches: ['codex/pe13-419-legacy-ice-r11']
+    branches: ['codex/polaris-419-smoothness']
     paths: ['pe13-419-r11/**', '.github/workflows/pe13-419-offline.yml']
   workflow_dispatch:
 permissions:
@@ -27,7 +27,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pe13-419-r11-NOT-FOR-FLASHING
+          name: polaris-419-smoothness-NOT-FOR-FLASHING
           path: |
             ${{ runner.temp }}/pe13-419-build/*.log
             ${{ runner.temp }}/pe13-419-build/*.json
