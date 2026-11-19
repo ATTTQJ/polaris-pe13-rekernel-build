@@ -25,6 +25,8 @@ REQUIRED = {
     "CONFIG_UCLAMP_TASK": "y",
     "CONFIG_UCLAMP_TASK_GROUP": "y",
     "CONFIG_ZRAM_MULTI_COMP": "y",
+    "CONFIG_LRU_GEN": "y",
+    "CONFIG_LRU_GEN_ENABLED": "n",
     "CONFIG_CRYPTO_LZO": "y",
     "CONFIG_CRYPTO_LZ4": "y",
     "CONFIG_CRYPTO_ZSTD": "y",
