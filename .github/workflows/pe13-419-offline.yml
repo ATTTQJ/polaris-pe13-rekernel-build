@@ -1,7 +1,7 @@
-name: Polaris PE13 4.19 r12 dither candidate
+name: Polaris PE13 4.19 backports candidate
 on:
   push:
-    branches: ['codex/polaris-419-dither']
+    branches: ['codex/polaris-419-backports']
     paths: ['pe13-419-r11/**', '.github/workflows/pe13-419-offline.yml']
   workflow_dispatch:
 permissions:
@@ -27,7 +27,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: polaris-pe13-r12-NOT-FOR-FLASHING
+          name: polaris-pe13-backports-NOT-FOR-FLASHING
           path: |
             ${{ runner.temp }}/pe13-419-build/*.log
             ${{ runner.temp }}/pe13-419-build/*.json
