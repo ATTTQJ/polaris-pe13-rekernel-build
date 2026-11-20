@@ -57,7 +57,7 @@ if [[ ${PE13_DTB_ONLY:-0} == 1 ]]; then
 else
     make -j"${JOBS:-4}" "${args[@]}" Image.gz-dtb |& tee "$build_root/build.log"
     test -s out/arch/arm64/boot/Image.gz-dtb
-    cp out/arch/arm64/boot/Image.gz-dtb "$build_root/artifacts/pe13-419-r11-NOT-FOR-FLASHING.bin"
+    cp out/arch/arm64/boot/Image.gz-dtb "$build_root/artifacts/pe13-419-r14-NOT-FOR-FLASHING.bin"
 fi
 cp out/.config "$build_root/artifacts/kernel.config"
 sha256sum "$build_root/artifacts/"* > "$build_root/artifacts/SHA256SUMS"

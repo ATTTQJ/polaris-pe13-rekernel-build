@@ -1,0 +1,13 @@
+diff --git a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+index 2bfd890f88075f20247c538ecad918f2e94326da..5e63e8b8ddfe323804e577838ee1dbecd57793e4 100644
+--- a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
++++ b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+@@ -16,3 +16,8 @@ CONFIG_ION_FORCE_DMA_SYNC=y
+ 
+ CONFIG_REKERNEL=y
+ CONFIG_REKERNEL_NETWORK=y
++
++# Keep userspace's existing compressor selection and opt in to recompression.
++CONFIG_ZRAM_MULTI_COMP=y
++CONFIG_UCLAMP_TASK=y
++CONFIG_UCLAMP_TASK_GROUP=y
