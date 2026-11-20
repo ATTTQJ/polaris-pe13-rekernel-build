@@ -1,0 +1,13 @@
+diff --git a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+index ab1e312ed1d7cf8ef3a0683db67c2bfb8c0c23d4..bfcc5f87c19010263b126e06532d24a09a59c7e7 100644
+--- a/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
++++ b/arch/arm64/configs/vendor/xiaomi/polaris-pe13.config
+@@ -25,3 +25,8 @@ CONFIG_UCLAMP_TASK_GROUP=y
+ # Expose the runtime switch for controlled reclaim comparisons.
+ CONFIG_LRU_GEN=y
+ # CONFIG_LRU_GEN_ENABLED is not set
++
++# Polaris UFS runs on the legacy single-queue SCSI path.
++CONFIG_BLK_WBT=y
++CONFIG_BLK_WBT_SQ=y
++# CONFIG_BLK_WBT_MQ is not set

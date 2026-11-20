@@ -1,0 +1,179 @@
+diff --git a/Documentation/ABI/testing/sysfs-block-zram b/Documentation/ABI/testing/sysfs-block-zram
+index 6a3821a9431d2b33d98a961e63ab0ae7a3ecfb08..977b831fe91c9cd84d0816b6b2c37f72c22dccef 100644
+--- a/Documentation/ABI/testing/sysfs-block-zram
++++ b/Documentation/ABI/testing/sysfs-block-zram
+@@ -200,6 +200,13 @@ Description:
+ 			    with the given name.
+ 		    priority=  recompress using the secondary algorithm
+ 			    with the given priority (index).
++		    idle_seconds=  for idle or huge_idle, select pages by
++			    time since their last access, in whole seconds.
++			    This replaces the manual idle mark for that request.
++		    start=  first logical page index to examine (default 0).
++		    max_scan=  scan at most this many slots from start.
++		    max_pages=  attempt recompression for at most this many
++			    eligible pages. A zero limit leaves that budget unlimited.
+ 
+ 		Examples:
+ 
+diff --git a/drivers/block/zram/zram_drv.c b/drivers/block/zram/zram_drv.c
+index 3ce558f9adfe57640575e1de08604251277d1af6..70172c8b19ec72bc16e446d6b3107817cb8198d5 100644
+--- a/drivers/block/zram/zram_drv.c
++++ b/drivers/block/zram/zram_drv.c
+@@ -33,6 +33,7 @@
+ #include <linux/sysfs.h>
+ #include <linux/debugfs.h>
+ #include <linux/cpuhotplug.h>
++#include <linux/timekeeping.h>
+ 
+ #include "zram_drv.h"
+ 
+@@ -93,6 +94,20 @@ static inline u32 zram_get_priority(struct zram *zram, u32 index)
+ #endif
+ }
+ 
++#ifdef CONFIG_ZRAM_MULTI_COMP
++/* Use the spare slot flag bits for a coarse boottime timestamp. */
++#define ZRAM_ACCESS_SHIFT __NR_ZRAM_PAGEFLAGS
++#define ZRAM_ACCESS_MASK (ULONG_MAX >> ZRAM_ACCESS_SHIFT)
++
++static bool zram_idle_for(struct zram *zram, u32 index, unsigned int seconds)
++{
++	unsigned long then = zram->table[index].flags >> ZRAM_ACCESS_SHIFT;
++	unsigned long now = ktime_get_boottime_seconds();
++
++	return ((now - then) & ZRAM_ACCESS_MASK) >= seconds;
++}
++#endif
++
+ static void zram_slot_lock(struct zram *zram, u32 index)
+ {
+ 	bit_spin_lock(ZRAM_LOCK, &zram->table[index].flags);
+@@ -899,6 +914,19 @@ static int read_from_bdev(struct zram *zram, struct bio_vec *bvec,
+ static void free_block_bdev(struct zram *zram, unsigned long blk_idx) {};
+ #endif
+ 
++static void zram_accessed(struct zram *zram, u32 index)
++{
++	zram_clear_flag(zram, index, ZRAM_IDLE);
++#ifdef CONFIG_ZRAM_MEMORY_TRACKING
++	zram->table[index].ac_time = ktime_get_boottime();
++#endif
++#ifdef CONFIG_ZRAM_MULTI_COMP
++	zram->table[index].flags &= ~(ZRAM_ACCESS_MASK << ZRAM_ACCESS_SHIFT);
++	zram->table[index].flags |=
++		(ktime_get_boottime_seconds() & ZRAM_ACCESS_MASK) << ZRAM_ACCESS_SHIFT;
++#endif
++}
++
+ #ifdef CONFIG_ZRAM_MEMORY_TRACKING
+ 
+ static struct dentry *zram_debugfs_root;
+@@ -913,12 +941,6 @@ static void zram_debugfs_destroy(void)
+ 	debugfs_remove_recursive(zram_debugfs_root);
+ }
+ 
+-static void zram_accessed(struct zram *zram, u32 index)
+-{
+-	zram_clear_flag(zram, index, ZRAM_IDLE);
+-	zram->table[index].ac_time = ktime_get_boottime();
+-}
+-
+ static ssize_t read_block_state(struct file *file, char __user *buf,
+ 				size_t count, loff_t *ppos)
+ {
+@@ -999,10 +1021,6 @@ static void zram_debugfs_unregister(struct zram *zram)
+ #else
+ static void zram_debugfs_create(void) {};
+ static void zram_debugfs_destroy(void) {};
+-static void zram_accessed(struct zram *zram, u32 index)
+-{
+-	zram_clear_flag(zram, index, ZRAM_IDLE);
+-};
+ static void zram_debugfs_register(struct zram *zram) {};
+ static void zram_debugfs_unregister(struct zram *zram) {};
+ #endif
+@@ -1865,11 +1883,13 @@ static ssize_t recompress_store(struct device *dev,
+ {
+ 	struct zram *zram = dev_to_zram(dev);
+ 	u32 prio = ZRAM_SECONDARY_COMP, prio_max = ZRAM_MAX_COMPS;
+-	unsigned long nr_pages;
+-	char input[CRYPTO_MAX_ALG_NAME + 80];
++	unsigned long nr_pages, end;
++	char input[CRYPTO_MAX_ALG_NAME + 160];
+ 	char *args, *param, *val, *algo = NULL;
+ 	bool prio_param = false;
+ 	u32 mode = 0, threshold = 0;
++	u32 max_pages = 0, max_scan = 0, start = 0, idle_seconds = 0;
++	unsigned int selected = 0;
+ 	unsigned long index;
+ 	struct page *page;
+ 	ssize_t ret;
+@@ -1918,10 +1938,22 @@ static ssize_t recompress_store(struct device *dev,
+ 				return ret;
+ 			continue;
+ 		}
+-		return -EINVAL;
++		if (!strcmp(param, "max_pages"))
++			ret = kstrtouint(val, 10, &max_pages);
++		else if (!strcmp(param, "max_scan"))
++			ret = kstrtouint(val, 10, &max_scan);
++		else if (!strcmp(param, "start"))
++			ret = kstrtouint(val, 10, &start);
++		else if (!strcmp(param, "idle_seconds"))
++			ret = kstrtouint(val, 10, &idle_seconds);
++		else
++			return -EINVAL;
++		if (ret)
++			return ret;
+ 	}
+ 
+-	if (threshold >= PAGE_SIZE)
++	if (threshold >= PAGE_SIZE || idle_seconds > ZRAM_ACCESS_MASK ||
++	    (idle_seconds && !(mode & RECOMPRESS_IDLE)))
+ 		return -EINVAL;
+ 
+ 	down_read(&zram->init_lock);
+@@ -1972,6 +2004,11 @@ static ssize_t recompress_store(struct device *dev,
+ 	}
+ 
+ 	nr_pages = zram->disksize >> PAGE_SHIFT;
++	if (start >= nr_pages) {
++		ret = -EINVAL;
++		goto release_init_lock;
++	}
++	end = max_scan ? start + min_t(unsigned long, max_scan, nr_pages - start) : nr_pages;
+ 
+ 	page = alloc_page(GFP_KERNEL);
+ 	if (!page) {
+@@ -1980,7 +2017,7 @@ static ssize_t recompress_store(struct device *dev,
+ 	}
+ 
+ 	ret = len;
+-	for (index = 0; index < nr_pages; index++) {
++	for (index = start; index < end && (!max_pages || selected < max_pages); index++) {
+ 		int err = 0;
+ 
+ 		zram_slot_lock(zram, index);
+@@ -1989,7 +2026,8 @@ static ssize_t recompress_store(struct device *dev,
+ 			goto next;
+ 
+ 		if (mode & RECOMPRESS_IDLE &&
+-		    !zram_test_flag(zram, index, ZRAM_IDLE))
++		    !(idle_seconds ? zram_idle_for(zram, index, idle_seconds) :
++				    zram_test_flag(zram, index, ZRAM_IDLE)))
+ 			goto next;
+ 
+ 		if (mode & RECOMPRESS_HUGE &&
+@@ -2002,6 +2040,11 @@ static ssize_t recompress_store(struct device *dev,
+ 		    zram_test_flag(zram, index, ZRAM_INCOMPRESSIBLE))
+ 			goto next;
+ 
++		if (zram_get_obj_size(zram, index) < threshold ||
++		    zram_get_priority(zram, index) + 1 >= prio_max)
++			goto next;
++
++		selected++;
+ 		err = zram_recompress(zram, index, page, threshold,
+ 				      prio, prio_max);
+ next:
