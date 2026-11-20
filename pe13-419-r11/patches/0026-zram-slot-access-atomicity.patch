@@ -1,0 +1,31 @@
+diff --git a/drivers/block/zram/zram_drv.c b/drivers/block/zram/zram_drv.c
+index 70172c8b19ec72bc16e446d6b3107817cb8198d5..4cf383d885da42c218a9ec6a9c073a383226a176 100644
+--- a/drivers/block/zram/zram_drv.c
++++ b/drivers/block/zram/zram_drv.c
+@@ -1466,6 +1466,7 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
+ 	void *src, *dst;
+ 
+ 	zram_slot_lock(zram, index);
++	zram_accessed(zram, index);
+ 	if (zram_test_flag(zram, index, ZRAM_WB)) {
+ 		struct bio_vec bvec;
+ 
+@@ -1673,6 +1674,7 @@ static int __zram_bvec_write(struct zram *zram, struct bio_vec *bvec,
+ 		zram_set_entry(zram, index, entry);
+ 		zram_set_obj_size(zram, index, comp_len);
+ 	}
++	zram_accessed(zram, index);
+ 	zram_slot_unlock(zram, index);
+ 
+ 	/* Update stats */
+@@ -2129,10 +2131,6 @@ static int zram_bvec_rw(struct zram *zram, struct bio_vec *bvec, u32 index,
+ 
+ 	generic_end_io_acct(q, op, &zram->disk->part0, start_time);
+ 
+-	zram_slot_lock(zram, index);
+-	zram_accessed(zram, index);
+-	zram_slot_unlock(zram, index);
+-
+ 	if (unlikely(ret < 0)) {
+ 		if (!op_is_write(op))
+ 			atomic64_inc(&zram->stats.failed_reads);
