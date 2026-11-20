@@ -13,13 +13,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
-        timeout-minutes: 7
+        timeout-minutes: 18
         run: |
           packages=(clang-16 lld-16 llvm-16 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libelf-dev bc bison flex device-tree-compiler cpio rsync)
-          options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
-          if ! sudo timeout --kill-after=10s 120s apt-get "${options[@]}" install --no-install-recommends -y "${packages[@]}"; then
-            sudo timeout --kill-after=10s 100s apt-get "${options[@]}" update
-            sudo timeout --kill-after=10s 150s apt-get "${options[@]}" install --no-install-recommends -y "${packages[@]}"
+          options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Languages=none)
+          if ! sudo timeout --kill-after=10s 180s apt-get "${options[@]}" install --no-install-recommends -y "${packages[@]}"; then
+            cat > "$RUNNER_TEMP/polaris-ubuntu.sources" <<'SOURCES'
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: https://security.ubuntu.com/ubuntu
+          Suites: noble-security
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          SOURCES
+            fallback=(-o "Dir::Etc::sourcelist=$RUNNER_TEMP/polaris-ubuntu.sources" -o Dir::Etc::sourceparts=-)
+            sudo timeout --kill-after=10s 220s apt-get "${options[@]}" "${fallback[@]}" update
+            sudo timeout --kill-after=10s 430s apt-get "${options[@]}" "${fallback[@]}" install --no-install-recommends -y "${packages[@]}"
           fi
       - name: Build pinned full kernel and candidate patches
         run: bash pe13-419-r11/scripts/build_linux.sh "$RUNNER_TEMP/pe13-419-build"
